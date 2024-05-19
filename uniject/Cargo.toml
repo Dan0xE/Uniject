@@ -1,0 +1,10 @@
+[package]
+name = "uniject"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winapi = {version = "0.3", features = ["processthreadsapi", "winnt", "memoryapi", "psapi", "winbase", "errhandlingapi"]}
+bitflags = "2"
+sysinfo = "0.30"
+once_cell = "1"

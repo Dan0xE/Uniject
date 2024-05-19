@@ -1,0 +1,2 @@
+[workspace]
+members = ["uniject", "uniject_console"]
