@@ -1,0 +1,10 @@
+repos:
+  -   repo: local
+      hooks:
+        -   id: cargo-fmt
+            name: cargo fmt
+            description: Format Rust code using cargo fmt.
+            entry: sh -c 'cargo fmt --all && git add -u'
+            language: system
+            types: [rust]
+            pass_filenames: false
