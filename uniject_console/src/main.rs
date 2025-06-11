@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
+use log::{error, info};
 use uniject::Injector;
 
 #[derive(Parser)]
@@ -56,6 +57,9 @@ enum Commands {
 }
 
 fn main() {
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Debug)
+        .init();
     let cli = Cli::parse();
 
     match &cli.command {
@@ -75,7 +79,7 @@ fn create_injector(process: &str) -> Injector {
         match Injector::new(pid) {
             Ok(injector) => injector,
             Err(err) => {
-                println!("Failed to create Injector for process ID {}: {}", pid, err);
+                error!("Failed to create Injector for process ID {}: {}", pid, err);
                 exit(1);
             }
         }
@@ -83,7 +87,7 @@ fn create_injector(process: &str) -> Injector {
         match Injector::new_by_name(process) {
             Ok(injector) => injector,
             Err(err) => {
-                println!("Failed to create Injector for process name {}: {}", process, err);
+                error!("Failed to create Injector for process name {}: {}", process, err);
                 exit(1);
             }
         }
@@ -95,14 +99,14 @@ fn inject_assembly(injector: &mut Injector, assembly_path: &str, namespace: &str
     let assembly = match fs::read(assembly_path) {
         Ok(content) => content,
         Err(_) => {
-            println!("Could not read the file {}", assembly_path);
+            error!("Could not read the file {}", assembly_path);
             return;
         }
     };
 
     match injector.inject(&assembly, namespace, class_name, method_name) {
         Ok(remote_assembly) => {
-            println!(
+            info!(
                 "{}: {}",
                 Path::new(assembly_path)
                     .file_name()
@@ -111,7 +115,7 @@ fn inject_assembly(injector: &mut Injector, assembly_path: &str, namespace: &str
                 format_address(remote_assembly, injector.is_64_bit)
             );
         }
-        Err(e) => println!("Failed to inject assembly: {}", e),
+        Err(e) => error!("Failed to inject assembly: {}", e),
     }
 }
 
@@ -119,20 +123,20 @@ fn eject_assembly(injector: &mut Injector, assembly_str: &str, namespace: &str, 
     let assembly_ptr = parse_assembly_address(assembly_str);
     
     match injector.eject(assembly_ptr, namespace, class_name, method_name) {
-        Ok(_) => println!("Ejection successful"),
-        Err(e) => println!("Ejection failed: {}", e),
+        Ok(_) => info!("Ejection successful"),
+        Err(e) => error!("Ejection failed: {}", e),
     }
 }
 
 fn parse_assembly_address(addr_str: &str) -> usize {
     if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
         usize::from_str_radix(&addr_str[2..], 16).unwrap_or_else(|_| {
-            println!("Invalid hex address: {}", addr_str);
+            error!("Invalid hex address: {}", addr_str);
             exit(1);
         })
     } else {
         addr_str.parse::<usize>().unwrap_or_else(|_| {
-            println!("Invalid address: {}", addr_str);
+            error!("Invalid address: {}", addr_str);
             exit(1);
         })
     }

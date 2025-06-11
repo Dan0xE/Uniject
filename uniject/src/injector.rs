@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
-
+use log::error;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_FAILED};
 use windows::Win32::System::Threading::{
     CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject,
@@ -139,7 +139,7 @@ impl Injector {
             match CloseHandle(self.handle) {
                 Ok(_) => {}
                 Err(err) => {
-                    eprintln!("Failed to close process handle: {}", err);
+                    error!("Failed to close process handle: {}", err);
                 }
             }
         }

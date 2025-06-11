@@ -7,3 +7,4 @@ edition = "2024"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Diagnostics_Debug", "Win32_Security"] }
 sysinfo = "0.35"
 iced-x86 = { version = "1", features = ["code_asm"] }
+log = "0.4"

@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 uniject = {path = "../uniject"}
 clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
