@@ -128,7 +128,6 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "iced-x86",
- "once_cell",
  "sysinfo",
  "winapi",
 ]

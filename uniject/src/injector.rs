@@ -1,11 +1,11 @@
 use std::{collections::HashMap, ptr::null_mut};
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use winapi::{ctypes::c_void, shared::{minwindef::DWORD, ntdef::HANDLE}};
 
 use crate::{assembler::Assembler, injector_exceptions::InjectorException, memory::Memory, native::{CloseHandle, CreateRemoteThread, OpenProcess, WaitForSingleObject, WaitResult, ProcessAccessRights}, proc_utils::{find_process_id_by_name, get_exported_functions, get_mono_module, is_64_bit_process}, status::MonoImageOpenStatus};
 
-static EXPORTS: Lazy<HashMap<&'static str, usize>> = Lazy::new(|| {
+static EXPORTS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
     HashMap::from([
         ("mono_get_root_domain", 0),
         ("mono_thread_attach", 0),
