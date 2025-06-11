@@ -21,7 +21,7 @@ impl fmt::Display for InjectorException {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "InjectorException: {}", self.message)?;
         if let Some(ref inner) = self.inner {
-            write!(f, "\nCaused by: {}", inner)?;
+            write!(f, "\nCaused by: {inner}")?;
         }
         Ok(())
     }
@@ -35,6 +35,6 @@ impl Error for InjectorException {
 
 impl From<iced_x86::IcedError> for InjectorException {
     fn from(error: iced_x86::IcedError) -> Self {
-        InjectorException::new(&format!("Assembly error: {}", error))
+        InjectorException::new(&format!("Assembly error: {error}"))
     }
 }

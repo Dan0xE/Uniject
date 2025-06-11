@@ -1,4 +1,5 @@
 use iced_x86::code_asm::*;
+
 use crate::injector_exceptions::InjectorException;
 
 pub type AssemblerResult<T> = Result<T, InjectorException>;

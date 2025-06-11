@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
+
 use log::error;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_FAILED};
 use windows::Win32::System::Threading::{
@@ -58,8 +59,7 @@ impl Injector {
     pub fn new_by_name(process_name: &str) -> Result<Self, InjectorException> {
         let process_id = find_process_id_by_name(process_name).ok_or_else(|| {
             InjectorException::new(&format!(
-                "Could not find a process with the name {}",
-                process_name
+                "Could not find a process with the name {process_name}"
             ))
         })?;
 
@@ -71,15 +71,13 @@ impl Injector {
 
         let Ok(handle) = handle else {
             return Err(InjectorException::new(&format!(
-                "Failed to open process with ID {}",
-                process_id
+                "Failed to open process with ID {process_id}"
             )));
         };
 
         if handle.is_invalid() {
             return Err(InjectorException::new(&format!(
-                "Failed to open process with ID {}",
-                process_id
+                "Failed to open process with ID {process_id}"
             )));
         }
 
@@ -139,7 +137,7 @@ impl Injector {
             match CloseHandle(self.handle) {
                 Ok(_) => {}
                 Err(err) => {
-                    error!("Failed to close process handle: {}", err);
+                    error!("Failed to close process handle: {err}");
                 }
             }
         }
@@ -157,8 +155,7 @@ impl Injector {
         for (name, &address) in &self.exports {
             if address == 0 {
                 return Err(InjectorException::new(&format!(
-                    "Failed to obtain the address of {}()",
-                    name
+                    "Failed to obtain the address of {name}()"
                 )));
             }
         }
@@ -236,7 +233,7 @@ impl Injector {
 
     fn throw_if_null(&self, ptr: usize, method_name: &str) -> Result<(), InjectorException> {
         if ptr == 0 {
-            return Err(InjectorException::new(&format!("{}() returned NULL", method_name)));
+            return Err(InjectorException::new(&format!("{method_name}() returned NULL")));
         }
 
         Ok(())
@@ -276,7 +273,7 @@ impl Injector {
         //read status
         let status = MonoImageOpenStatus::from(self.memory.read_int(status_ptr)?);
 
-        if status != MonoImageOpenStatus::MonoImageOk {
+        if status != MonoImageOpenStatus::Ok {
             //get error msg ptr
             let mono_image_strerror_address = *self
                 .exports
@@ -309,7 +306,7 @@ impl Injector {
 
         let status = MonoImageOpenStatus::from(self.memory.read_int(status_ptr)?);
 
-        if status != MonoImageOpenStatus::MonoImageOk {
+        if status != MonoImageOpenStatus::Ok {
             let message_ptr = self.execute(
                 *self.exports.get(Self::MONO_IMAGE_STRERROR).ok_or_else(|| {
                     InjectorException::new("Mono image strerror export not found")
@@ -398,7 +395,7 @@ impl Injector {
         )?;
         self.throw_if_null(class_name_address, Self::MONO_CLASS_GET_NAME)?;
 
-        Ok(self.memory.read_string(class_name_address, 256)?)
+        self.memory.read_string(class_name_address, 256)
     }
 
     pub fn read_mono_string(&self, mono_string: usize) -> Result<String, InjectorException> {
@@ -431,8 +428,7 @@ impl Injector {
             let message =
                 self.read_mono_string(if self.is_64_bit { exc + 0x20 } else { exc + 0x10 })?;
             return Err(InjectorException::new(&format!(
-                "The managed method threw an exception: ({}) {}",
-                class_name, message
+                "The managed method threw an exception: ({class_name}) {message}"
             )));
         }
 
@@ -467,7 +463,10 @@ impl Injector {
                 self.handle,
                 None,
                 0,
-                Some(std::mem::transmute(alloc)),
+                Some(std::mem::transmute::<
+                    usize,
+                    unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
+                >(alloc)),
                 None,
                 0,
                 Some(&mut thread_id),
@@ -502,15 +501,19 @@ impl Injector {
                 .unwrap_or("unknown function");
 
             return Err(InjectorException::new(&format!(
-                "An access violation occurred while executing {}()",
-                function_name
+                "An access violation occurred while executing {function_name}()"
             )));
         }
 
         Ok(ret)
     }
 
-    pub fn assemble(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Result<Vec<u8>, InjectorException> {
+    pub fn assemble(
+        &self,
+        function_ptr: usize,
+        ret_val_ptr: usize,
+        args: &[usize],
+    ) -> Result<Vec<u8>, InjectorException> {
         if self.is_64_bit {
             self.assemble_64(function_ptr, ret_val_ptr, args)
         } else {
@@ -518,7 +521,12 @@ impl Injector {
         }
     }
 
-    pub fn assemble_86(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Result<Vec<u8>, InjectorException> {
+    pub fn assemble_86(
+        &self,
+        function_ptr: usize,
+        ret_val_ptr: usize,
+        args: &[usize],
+    ) -> Result<Vec<u8>, InjectorException> {
         let mut asm = Assembler::new()?;
 
         if self.attach {
@@ -543,7 +551,12 @@ impl Injector {
         asm.to_byte_array()
     }
 
-    pub fn assemble_64(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Result<Vec<u8>, InjectorException> {
+    pub fn assemble_64(
+        &self,
+        function_ptr: usize,
+        ret_val_ptr: usize,
+        args: &[usize],
+    ) -> Result<Vec<u8>, InjectorException> {
         let mut asm = Assembler::new()?;
 
         asm.sub_rsp(40)?;

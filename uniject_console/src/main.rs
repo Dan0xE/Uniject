@@ -57,9 +57,7 @@ enum Commands {
 }
 
 fn main() {
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Debug)
-        .init();
+    env_logger::Builder::from_default_env().filter_level(log::LevelFilter::Debug).init();
     let cli = Cli::parse();
 
     match &cli.command {
@@ -94,8 +92,13 @@ fn create_injector(process: &str) -> Injector {
     }
 }
 
-
-fn inject_assembly(injector: &mut Injector, assembly_path: &str, namespace: &str, class_name: &str, method_name: &str) {
+fn inject_assembly(
+    injector: &mut Injector,
+    assembly_path: &str,
+    namespace: &str,
+    class_name: &str,
+    method_name: &str,
+) {
     let assembly = match fs::read(assembly_path) {
         Ok(content) => content,
         Err(_) => {
@@ -119,9 +122,15 @@ fn inject_assembly(injector: &mut Injector, assembly_path: &str, namespace: &str
     }
 }
 
-fn eject_assembly(injector: &mut Injector, assembly_str: &str, namespace: &str, class_name: &str, method_name: &str) {
+fn eject_assembly(
+    injector: &mut Injector,
+    assembly_str: &str,
+    namespace: &str,
+    class_name: &str,
+    method_name: &str,
+) {
     let assembly_ptr = parse_assembly_address(assembly_str);
-    
+
     match injector.eject(assembly_ptr, namespace, class_name, method_name) {
         Ok(_) => info!("Ejection successful"),
         Err(e) => error!("Ejection failed: {}", e),

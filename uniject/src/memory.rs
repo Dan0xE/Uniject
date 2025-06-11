@@ -147,7 +147,7 @@ impl Drop for Memory {
                 ) {
                     Ok(_) => {}
                     Err(err) => {
-                        error!("Failed to free memory at address {:X}: {}", address, err)
+                        error!("Failed to free memory at address {address:X}: {err}")
                     }
                 }
             }
