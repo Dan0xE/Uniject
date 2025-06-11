@@ -90,7 +90,7 @@ pub enum ProcessAccessRights {
     // Synchronize = 0x00100000,
 }
 
-extern "system" {
+unsafe extern "system" {
     pub fn OpenProcess(dwDesiredAccess: DWORD, bInheritHandle: BOOL, dwProcessId: DWORD) -> HANDLE;
 
     pub fn CloseHandle(hObject: HANDLE) -> BOOL;

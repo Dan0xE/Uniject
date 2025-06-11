@@ -475,7 +475,7 @@ impl Injector {
             let function_name = self
                 .exports
                 .iter()
-                .find(|(_, &addr)| addr == address)
+                .find(|(_, addr)| **addr == address)
                 .map(|(name, _)| *name)
                 .unwrap_or("unknown function");
 
