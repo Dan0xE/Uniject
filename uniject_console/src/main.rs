@@ -3,129 +3,108 @@ use std::fs;
 use std::path::Path;
 use std::process::exit;
 
+use clap::{Parser, Subcommand};
 use uniject::Injector;
 
-mod args;
-use args::CommandLineArguments;
+#[derive(Parser)]
+#[command(name = "uniject_console")]
+#[command(version = "0.1.0")]
+#[command(about = "A .NET assembly injector for Mono-based games")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Inject a .NET assembly into a target process
+    Inject {
+        /// Process ID or name of the target process
+        #[arg(short, long)]
+        process: String,
+        /// Path to the assembly to inject
+        #[arg(short, long)]
+        assembly: String,
+        /// Namespace containing the loader class
+        #[arg(short, long)]
+        namespace: String,
+        /// Name of the loader class
+        #[arg(short, long)]
+        class: String,
+        /// Name of the method to invoke
+        #[arg(short, long)]
+        method: String,
+    },
+    /// Eject a .NET assembly from a target process
+    Eject {
+        /// Process ID or name of the target process
+        #[arg(short, long)]
+        process: String,
+        /// Assembly address to eject (hex format supported)
+        #[arg(short, long)]
+        assembly: String,
+        /// Namespace containing the loader class
+        #[arg(short, long)]
+        namespace: String,
+        /// Name of the loader class
+        #[arg(short, long)]
+        class: String,
+        /// Name of the method to invoke
+        #[arg(short, long)]
+        method: String,
+    },
+}
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let cli = Cli::parse();
 
-    if args.len() == 1 {
-        print_help();
-        exit(0);
+    match &cli.command {
+        Commands::Inject { process, assembly, namespace, class, method } => {
+            let mut injector = create_injector(process);
+            inject_assembly(&mut injector, assembly, namespace, class, method);
+        }
+        Commands::Eject { process, assembly, namespace, class, method } => {
+            let mut injector = create_injector(process);
+            eject_assembly(&mut injector, assembly, namespace, class, method);
+        }
     }
+}
 
-    let cla = CommandLineArguments::new(&args[1..]);
-
-    let is_inject = cla.is_switch_present("inject");
-    let is_eject = cla.is_switch_present("eject");
-
-    if !is_inject && !is_eject {
-        println!("No operation (inject/eject) specified");
-        exit(1);
-    }
-
-    let mut injector = if let Some(pid) = cla.get_int_arg("-p") {
-        match Injector::new(pid as u32) {
+fn create_injector(process: &str) -> Injector {
+    if let Ok(pid) = process.parse::<u32>() {
+        match Injector::new(pid) {
             Ok(injector) => injector,
             Err(err) => {
                 println!("Failed to create Injector for process ID {}: {}", pid, err);
                 exit(1);
             }
         }
-    } else if let Some(pname) = cla.get_string_arg("-p") {
-        match Injector::new_by_name(pname) {
+    } else {
+        match Injector::new_by_name(process) {
             Ok(injector) => injector,
             Err(err) => {
-                println!("Failed to create Injector for process name {}: {}", pname, err);
+                println!("Failed to create Injector for process name {}: {}", process, err);
                 exit(1);
             }
         }
-    } else {
-        println!("No process id/name specified");
-        exit(1);
-    };
-
-    if is_inject {
-        inject(&mut injector, &cla);
-    } else {
-        eject(&mut injector, &cla);
     }
 }
 
-fn print_help() {
-    let help = r#"Uniject 0.1.0
 
-Usage:
-uniject_console <inject/eject> <options>
-
-Options:
--p - The id or name of the target process
--a - When injecting, the path of the assembly to inject. When ejecting, the address of the assembly to eject
--n - The namespace in which the loader class resides
--c - The name of the loader class
--m - The name of the method to invoke in the loader class
-
-Examples:
-uniject_console inject -p testgame -a ExampleAssembly.dll -n ExampleAssembly -c Loader -m Load
-uniject_console eject -p testgame -a 0x13D23A98 -n ExampleAssembly -c Loader -m Unload
-"#;
-
-    println!("{}", help);
-}
-
-fn inject(injector: &mut Injector, args: &CommandLineArguments) {
-    let assembly_path: String;
-    let namespace: String;
-    let class_name: String;
-    let method_name: String;
-
-    let assembly: Vec<u8>;
-
-    if let Some(path) = args.get_string_arg("-a") {
-        match fs::read(path) {
-            Ok(content) => assembly = content,
-            Err(_) => {
-                println!("Could not read the file {}", path);
-                return;
-            }
-        }
-        assembly_path = path.to_string();
-    } else {
-        println!("No assembly specified");
-        return;
-    }
-
-    namespace = match args.get_string_arg("-n") {
-        Some(ns) => ns.to_string(),
-        None => {
-            println!("No namespace specified");
+fn inject_assembly(injector: &mut Injector, assembly_path: &str, namespace: &str, class_name: &str, method_name: &str) {
+    let assembly = match fs::read(assembly_path) {
+        Ok(content) => content,
+        Err(_) => {
+            println!("Could not read the file {}", assembly_path);
             return;
         }
     };
 
-    class_name = match args.get_string_arg("-c") {
-        Some(class) => class.to_string(),
-        None => {
-            println!("No class name specified");
-            return;
-        }
-    };
-
-    method_name = match args.get_string_arg("-m") {
-        Some(method) => method.to_string(),
-        None => {
-            println!("No method name specified");
-            return;
-        }
-    };
-
-    match injector.inject(&assembly, &namespace, &class_name, &method_name) {
+    match injector.inject(&assembly, namespace, class_name, method_name) {
         Ok(remote_assembly) => {
             println!(
                 "{}: {}",
-                Path::new(&assembly_path)
+                Path::new(assembly_path)
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("unknown"),
@@ -136,48 +115,26 @@ fn inject(injector: &mut Injector, args: &CommandLineArguments) {
     }
 }
 
-fn eject(injector: &mut Injector, args: &CommandLineArguments) {
-    let assembly: usize;
-    let namespace: String;
-    let class_name: String;
-    let method_name: String;
-
-    assembly = if let Some(int_ptr) = args.get_int_arg("-a") {
-        int_ptr as usize
-    } else if let Some(long_ptr) = args.get_long_arg("-a") {
-        long_ptr as usize
-    } else {
-        println!("No assembly pointer specified");
-        return;
-    };
-
-    namespace = match args.get_string_arg("-n") {
-        Some(ns) => ns.to_string(),
-        None => {
-            println!("No namespace specified");
-            return;
-        }
-    };
-
-    class_name = match args.get_string_arg("-c") {
-        Some(class) => class.to_string(),
-        None => {
-            println!("No class name specified");
-            return;
-        }
-    };
-
-    method_name = match args.get_string_arg("-m") {
-        Some(method) => method.to_string(),
-        None => {
-            println!("No method name specified");
-            return;
-        }
-    };
-
-    match injector.eject(assembly, &namespace, &class_name, &method_name) {
+fn eject_assembly(injector: &mut Injector, assembly_str: &str, namespace: &str, class_name: &str, method_name: &str) {
+    let assembly_ptr = parse_assembly_address(assembly_str);
+    
+    match injector.eject(assembly_ptr, namespace, class_name, method_name) {
         Ok(_) => println!("Ejection successful"),
         Err(e) => println!("Ejection failed: {}", e),
+    }
+}
+
+fn parse_assembly_address(addr_str: &str) -> usize {
+    if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
+        usize::from_str_radix(&addr_str[2..], 16).unwrap_or_else(|_| {
+            println!("Invalid hex address: {}", addr_str);
+            exit(1);
+        })
+    } else {
+        addr_str.parse::<usize>().unwrap_or_else(|_| {
+            println!("Invalid address: {}", addr_str);
+            exit(1);
+        })
     }
 }
 
