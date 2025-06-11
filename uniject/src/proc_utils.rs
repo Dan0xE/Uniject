@@ -1,4 +1,4 @@
-use std::ffi::CStr;
+use std::ffi::{CStr};
 use std::mem::size_of;
 use std::ptr::null_mut;
 
@@ -7,19 +7,27 @@ use crate::injector_exceptions::InjectorException;
 use crate::memory::Memory;
 use windows::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, MODULEINFO, LIST_MODULES_ALL};
 use windows::Win32::Foundation::{HANDLE, HMODULE};
-use sysinfo::System;
+use sysinfo::{ProcessesToUpdate, System};
 use windows::core::BOOL;
 use windows::Win32::System::Threading::IsWow64Process;
 
 pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
-    let mut system = System::new_all();
-    system.refresh_all();
+    let process_name_lower = if process_name.to_lowercase().ends_with(".exe") {
+        process_name.to_lowercase()
+    } else {
+        format!("{}.exe", process_name.to_lowercase())
+    };
 
-    let x = system
-        .processes_by_name(process_name)
-        .next()
-        .map(|process| process.pid().as_u32());
-    x
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+
+    system
+        .processes()
+        .values()
+        .find(|process| {
+            process.name().to_string_lossy().to_lowercase() == process_name_lower
+        })
+        .map(|process| process.pid().as_u32())
 }
 
 pub fn get_exported_functions(
