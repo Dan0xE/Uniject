@@ -1,7 +1,11 @@
 use std::collections::HashMap;
+
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
-use windows::Win32::System::Memory::{VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE};
+use windows::Win32::System::Memory::{
+    MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx, VirtualFreeEx,
+};
+
 use crate::injector_exceptions::InjectorException;
 
 pub struct Memory {
@@ -14,10 +18,7 @@ impl Memory {
         if process_handle.0.is_null() {
             Err(InjectorException::new("Invalid process handle"))
         } else {
-            Ok(Memory {
-                handle: process_handle,
-                allocations: HashMap::new(),
-            })
+            Ok(Memory { handle: process_handle, allocations: HashMap::new() })
         }
     }
 
@@ -31,16 +32,21 @@ impl Memory {
             bytes.push(read);
         }
 
-        String::from_utf8(bytes).map_err(|e| InjectorException::with_inner("Failed to read string", Box::new(e)))
+        String::from_utf8(bytes)
+            .map_err(|e| InjectorException::with_inner("Failed to read string", Box::new(e)))
     }
 
-    pub fn read_unicode_string(&self, address: usize, length: usize) -> Result<String, InjectorException> {
+    pub fn read_unicode_string(
+        &self,
+        address: usize,
+        length: usize,
+    ) -> Result<String, InjectorException> {
         let bytes = self.read_bytes(address, length)?;
-        let utf16_units: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
-        String::from_utf16(&utf16_units).map_err(|e| InjectorException::with_inner("Failed to read Unicode string", Box::new(e)))
+        let utf16_units: Vec<u16> =
+            bytes.chunks_exact(2).map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]])).collect();
+        String::from_utf16(&utf16_units).map_err(|e| {
+            InjectorException::with_inner("Failed to read Unicode string", Box::new(e))
+        })
     }
 
     pub fn read_short(&self, address: usize) -> Result<i16, InjectorException> {
@@ -56,8 +62,7 @@ impl Memory {
     pub fn read_long(&self, address: usize) -> Result<i64, InjectorException> {
         let bytes = self.read_bytes(address, 8)?;
         Ok(i64::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]))
     }
 
@@ -73,7 +78,9 @@ impl Memory {
             )
         } {
             Ok(_) => Ok(buffer),
-            Err(err) => Err(InjectorException::with_inner("Failed to read process memory", Box::new(err))),
+            Err(err) => {
+                Err(InjectorException::with_inner("Failed to read process memory", Box::new(err)))
+            }
         }
     }
 
@@ -108,7 +115,6 @@ impl Memory {
             self.allocations.insert(addr, size);
             Ok(addr)
         }
-
     }
 
     pub fn write(&self, address: usize, data: &[u8]) -> Result<(), InjectorException> {
@@ -138,11 +144,13 @@ impl Drop for Memory {
                     size,
                     MEM_DECOMMIT,
                 ) {
-                    Ok(_) => {},
-                    Err(err) => eprintln!("Failed to free memory at address {:X}: {}", address, err),
+                    Ok(_) => {}
+                    Err(err) => {
+                        eprintln!("Failed to free memory at address {:X}: {}", address, err)
+                    }
                 }
-            } 
-        } 
+            }
+        }
         self.allocations.clear();
     }
 }

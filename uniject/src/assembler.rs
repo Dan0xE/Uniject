@@ -6,9 +6,7 @@ pub struct Assembler {
 
 impl Assembler {
     pub fn new() -> Self {
-        Assembler {
-            asm: CodeAssembler::new(64).unwrap(),
-        }
+        Assembler { asm: CodeAssembler::new(64).unwrap() }
     }
 
     pub fn mov_rax(&mut self, arg: usize) {

@@ -1,11 +1,18 @@
-use std::{collections::HashMap};
-
+use std::collections::HashMap;
 use std::sync::LazyLock;
-use windows::Win32::Foundation::HANDLE;
 
-use crate::{assembler::Assembler, injector_exceptions::InjectorException, memory::Memory, proc_utils::{find_process_id_by_name, get_exported_functions, get_mono_module, is_64_bit_process}, status::MonoImageOpenStatus};
-use windows::Win32::Foundation::{CloseHandle, WAIT_FAILED};
-use windows::Win32::System::Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_FAILED};
+use windows::Win32::System::Threading::{
+    CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject,
+};
+
+use crate::assembler::Assembler;
+use crate::injector_exceptions::InjectorException;
+use crate::memory::Memory;
+use crate::proc_utils::{
+    find_process_id_by_name, get_exported_functions, get_mono_module, is_64_bit_process,
+};
+use crate::status::MonoImageOpenStatus;
 
 static EXPORTS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
     HashMap::from([
@@ -24,7 +31,6 @@ static EXPORTS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
     ])
 });
 
-
 pub struct Injector {
     handle: HANDLE,
     memory: Memory,
@@ -34,7 +40,6 @@ pub struct Injector {
     mono_module: usize,
     pub is_64_bit: bool,
 }
-
 
 impl Injector {
     const MONO_GET_ROOT_DOMAIN: &'static str = "mono_get_root_domain";
@@ -51,8 +56,12 @@ impl Injector {
     const MONO_CLASS_GET_NAME: &'static str = "mono_class_get_name";
 
     pub fn new_by_name(process_name: &str) -> Result<Self, InjectorException> {
-        let process_id = find_process_id_by_name(process_name)
-            .ok_or_else(|| InjectorException::new(&format!("Could not find a process with the name {}", process_name)))?;
+        let process_id = find_process_id_by_name(process_name).ok_or_else(|| {
+            InjectorException::new(&format!(
+                "Could not find a process with the name {}",
+                process_name
+            ))
+        })?;
 
         Self::new(process_id)
     }
@@ -61,11 +70,17 @@ impl Injector {
         let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, process_id) };
 
         let Ok(handle) = handle else {
-            return Err(InjectorException::new(&format!("Failed to open process with ID {}", process_id)));
+            return Err(InjectorException::new(&format!(
+                "Failed to open process with ID {}",
+                process_id
+            )));
         };
 
         if handle.is_invalid() {
-            return Err(InjectorException::new(&format!("Failed to open process with ID {}", process_id)));
+            return Err(InjectorException::new(&format!(
+                "Failed to open process with ID {}",
+                process_id
+            )));
         }
 
         let mono_module = match get_mono_module(handle)? {
@@ -75,7 +90,9 @@ impl Injector {
 
         let is_64_bit = is_64_bit_process(handle)?;
 
-        let memory = Memory::new(handle).map_err(|err| InjectorException::with_inner("Failed to create memory handler", Box::new(err)))?;
+        let memory = Memory::new(handle).map_err(|err| {
+            InjectorException::with_inner("Failed to create memory handler", Box::new(err))
+        })?;
 
         Ok(Injector {
             handle,
@@ -102,15 +119,14 @@ impl Injector {
 
         let is_64_bit = is_64_bit_process(process_handle)?;
 
-        let memory = Memory::new(process_handle).map_err(|err| InjectorException::with_inner(
-            "Failed to create memory handler",
-            Box::new(err),
-        ))?;
+        let memory = Memory::new(process_handle).map_err(|err| {
+            InjectorException::with_inner("Failed to create memory handler", Box::new(err))
+        })?;
 
         Ok(Injector {
             handle: process_handle,
             memory,
-            exports : EXPORTS.clone(),
+            exports: EXPORTS.clone(),
             root_domain: 0,
             attach: false,
             mono_module,
@@ -220,10 +236,7 @@ impl Injector {
 
     fn throw_if_null(&self, ptr: usize, method_name: &str) -> Result<(), InjectorException> {
         if ptr == 0 {
-            return Err(InjectorException::new(&format!(
-                "{}() returned NULL",
-                method_name
-            )));
+            return Err(InjectorException::new(&format!("{}() returned NULL", method_name)));
         }
 
         Ok(())
@@ -275,7 +288,8 @@ impl Injector {
             let message = self.memory.read_string(message_ptr, 256)?;
             return Err(InjectorException::new(&format!(
                 "{}() failed: {}",
-                Self::MONO_IMAGE_OPEN_FROM_DATA, message
+                Self::MONO_IMAGE_OPEN_FROM_DATA,
+                message
             )));
         }
 
@@ -287,10 +301,9 @@ impl Injector {
         let empty_array_ptr = self.memory.allocate_and_write(&[0u8])?;
 
         let assembly = self.execute(
-            *self
-                .exports
-                .get(Self::MONO_ASSEMBLY_LOAD_FROM_FULL)
-                .ok_or_else(|| InjectorException::new("Mono assembly load from full export not found"))?,
+            *self.exports.get(Self::MONO_ASSEMBLY_LOAD_FROM_FULL).ok_or_else(|| {
+                InjectorException::new("Mono assembly load from full export not found")
+            })?,
             &[image, empty_array_ptr, status_ptr, 0],
         )?;
 
@@ -298,17 +311,17 @@ impl Injector {
 
         if status != MonoImageOpenStatus::MonoImageOk {
             let message_ptr = self.execute(
-                *self
-                    .exports
-                    .get(Self::MONO_IMAGE_STRERROR)
-                    .ok_or_else(|| InjectorException::new("Mono image strerror export not found"))?,
+                *self.exports.get(Self::MONO_IMAGE_STRERROR).ok_or_else(|| {
+                    InjectorException::new("Mono image strerror export not found")
+                })?,
                 &[status as usize],
             )?;
 
             let message = self.memory.read_string(message_ptr, 256)?;
             return Err(InjectorException::new(&format!(
                 "{}() failed: {}",
-                Self::MONO_ASSEMBLY_LOAD_FROM_FULL, message
+                Self::MONO_ASSEMBLY_LOAD_FROM_FULL,
+                message
             )));
         }
 
@@ -317,10 +330,9 @@ impl Injector {
 
     pub fn get_image_from_assembly(&mut self, assembly: usize) -> Result<usize, InjectorException> {
         let image = self.execute(
-            *self
-                .exports
-                .get(Self::MONO_ASSEMBLY_GET_IMAGE)
-                .ok_or_else(|| InjectorException::new("Mono assembly get image export not found"))?,
+            *self.exports.get(Self::MONO_ASSEMBLY_GET_IMAGE).ok_or_else(|| {
+                InjectorException::new("Mono assembly get image export not found")
+            })?,
             &[assembly],
         )?;
         self.throw_if_null(image, Self::MONO_ASSEMBLY_GET_IMAGE)?;
@@ -357,10 +369,9 @@ impl Injector {
         let method_name_ptr = self.memory.allocate_and_write(method_name.as_bytes())?;
 
         let method = self.execute(
-            *self
-                .exports
-                .get(Self::MONO_CLASS_GET_METHOD_FROM_NAME)
-                .ok_or_else(|| InjectorException::new("Mono class get method from name export not found"))?,
+            *self.exports.get(Self::MONO_CLASS_GET_METHOD_FROM_NAME).ok_or_else(|| {
+                InjectorException::new("Mono class get method from name export not found")
+            })?,
             &[class, method_name_ptr, 0],
         )?;
         self.throw_if_null(method, Self::MONO_CLASS_GET_METHOD_FROM_NAME)?;
@@ -417,11 +428,8 @@ impl Injector {
         let exc = self.memory.read_int(exc_ptr)? as usize;
         if exc != 0 {
             let class_name = self.get_class_name(exc)?;
-            let message = self.read_mono_string(if self.is_64_bit {
-                exc + 0x20
-            } else {
-                exc + 0x10
-            })?;
+            let message =
+                self.read_mono_string(if self.is_64_bit { exc + 0x20 } else { exc + 0x10 })?;
             return Err(InjectorException::new(&format!(
                 "The managed method threw an exception: ({}) {}",
                 class_name, message
@@ -430,7 +438,6 @@ impl Injector {
 
         Ok(())
     }
-
 
     pub fn close_assembly(&mut self, assembly: usize) -> Result<(), InjectorException> {
         let address = self
@@ -568,6 +575,4 @@ impl Injector {
 
         asm.to_byte_array()
     }
-
-
 }

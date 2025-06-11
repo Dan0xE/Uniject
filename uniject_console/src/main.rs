@@ -1,9 +1,9 @@
-use uniject::Injector;
-
 use std::fmt::Display;
 use std::fs;
 use std::path::Path;
 use std::process::exit;
+
+use uniject::Injector;
 
 mod args;
 use args::CommandLineArguments;
@@ -38,10 +38,7 @@ fn main() {
         match Injector::new_by_name(pname) {
             Ok(injector) => injector,
             Err(err) => {
-                println!(
-                    "Failed to create Injector for process name {}: {}",
-                    pname, err
-                );
+                println!("Failed to create Injector for process name {}: {}", pname, err);
                 exit(1);
             }
         }
@@ -185,9 +182,5 @@ fn eject(injector: &mut Injector, args: &CommandLineArguments) {
 }
 
 fn format_address<T: Display + std::fmt::UpperHex>(address: T, is_64_bit: bool) -> String {
-    if is_64_bit {
-        format!("0x{:016X}", address)
-    } else {
-        format!("0x{:08X}", address)
-    }
+    if is_64_bit { format!("0x{:016X}", address) } else { format!("0x{:08X}", address) }
 }

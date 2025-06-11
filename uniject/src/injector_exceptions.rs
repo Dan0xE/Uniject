@@ -9,17 +9,11 @@ pub struct InjectorException {
 
 impl InjectorException {
     pub fn new(message: &str) -> Self {
-        InjectorException {
-            message: message.to_string(),
-            inner: None,
-        }
+        InjectorException { message: message.to_string(), inner: None }
     }
 
     pub fn with_inner(message: &str, inner: Box<dyn Error>) -> Self {
-        InjectorException {
-            message: message.to_string(),
-            inner: Some(inner),
-        }
+        InjectorException { message: message.to_string(), inner: Some(inner) }
     }
 }
 

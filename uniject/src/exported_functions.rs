@@ -5,9 +5,6 @@ pub struct ExportedFunction {
 
 impl ExportedFunction {
     pub fn new(name: &str, address: usize) -> Self {
-        ExportedFunction {
-            name: name.to_string(),
-            address,
-        }
+        ExportedFunction { name: name.to_string(), address }
     }
 }

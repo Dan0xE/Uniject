@@ -1,15 +1,18 @@
-use std::ffi::{CStr};
+use std::ffi::CStr;
 use std::mem::size_of;
 use std::ptr::null_mut;
+
+use sysinfo::{ProcessesToUpdate, System};
+use windows::Win32::Foundation::{HANDLE, HMODULE};
+use windows::Win32::System::ProcessStatus::{
+    EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO,
+};
+use windows::Win32::System::Threading::IsWow64Process;
+use windows::core::BOOL;
 
 use crate::exported_functions::ExportedFunction;
 use crate::injector_exceptions::InjectorException;
 use crate::memory::Memory;
-use windows::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, MODULEINFO, LIST_MODULES_ALL};
-use windows::Win32::Foundation::{HANDLE, HMODULE};
-use sysinfo::{ProcessesToUpdate, System};
-use windows::core::BOOL;
-use windows::Win32::System::Threading::IsWow64Process;
 
 pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
     let process_name_lower = if process_name.to_lowercase().ends_with(".exe") {
@@ -24,9 +27,7 @@ pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
     system
         .processes()
         .values()
-        .find(|process| {
-            process.name().to_string_lossy().to_lowercase() == process_name_lower
-        })
+        .find(|process| process.name().to_string_lossy().to_lowercase() == process_name_lower)
         .map(|process| process.pid().as_u32())
 }
 
@@ -75,22 +76,16 @@ pub fn get_exported_functions(
         let offset = memory.read_int(names + i as usize * 4).map_err(|err| {
             InjectorException::with_inner("Failed to read function name offset", Box::new(err))
         })?;
-        let name = memory
-            .read_string(mod_address + offset as usize, 32)
-            .map_err(|err| {
-                InjectorException::with_inner("Failed to read function name", Box::new(err))
-            })?;
-        let ordinal = memory
-            .read_short(ordinals + i as usize * 2)
-            .map_err(|err| {
-                InjectorException::with_inner("Failed to read function ordinal", Box::new(err))
-            })?;
+        let name = memory.read_string(mod_address + offset as usize, 32).map_err(|err| {
+            InjectorException::with_inner("Failed to read function name", Box::new(err))
+        })?;
+        let ordinal = memory.read_short(ordinals + i as usize * 2).map_err(|err| {
+            InjectorException::with_inner("Failed to read function ordinal", Box::new(err))
+        })?;
         let address = mod_address
-            + memory
-                .read_int(functions + ordinal as usize * 4)
-                .map_err(|err| {
-                    InjectorException::with_inner("Failed to read function address", Box::new(err))
-                })? as usize;
+            + memory.read_int(functions + ordinal as usize * 4).map_err(|err| {
+                InjectorException::with_inner("Failed to read function address", Box::new(err))
+            })? as usize;
 
         if address != 0 {
             exported_functions.push(ExportedFunction::new(&name, address));
@@ -104,18 +99,11 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
     let mut bytes_needed: u32 = 0;
 
     //get required buffer size
-   if unsafe {
-        EnumProcessModulesEx(
-            handle,
-            null_mut(),
-            0,
-            &mut bytes_needed,
-            LIST_MODULES_ALL,
-        )
-    }.is_err() || bytes_needed == 0 {
-        return Err(InjectorException::new(
-            "Failed to enumerate process modules",
-        ));
+    if unsafe { EnumProcessModulesEx(handle, null_mut(), 0, &mut bytes_needed, LIST_MODULES_ALL) }
+        .is_err()
+        || bytes_needed == 0
+    {
+        return Err(InjectorException::new("Failed to enumerate process modules"));
     }
 
     //resize buffer
@@ -131,10 +119,10 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
             &mut bytes_needed,
             LIST_MODULES_ALL,
         )
-    }.is_err() {
-        return Err(InjectorException::new(
-            "Failed to enumerate process modules",
-        ))
+    }
+    .is_err()
+    {
+        return Err(InjectorException::new("Failed to enumerate process modules"));
     }
 
     for &module in ptrs.iter() {
@@ -147,25 +135,18 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
             continue;
         }
 
-        let path_str = unsafe { CStr::from_ptr(path.as_ptr() as *const i8) }
-            .to_string_lossy()
-            .to_lowercase();
+        let path_str =
+            unsafe { CStr::from_ptr(path.as_ptr() as *const i8) }.to_string_lossy().to_lowercase();
 
         if path_str.contains("mono") {
-            let mut info: MODULEINFO = MODULEINFO {
-                lpBaseOfDll: null_mut(),
-                SizeOfImage: 0,
-                EntryPoint: null_mut(),
-            };
+            let mut info: MODULEINFO =
+                MODULEINFO { lpBaseOfDll: null_mut(), SizeOfImage: 0, EntryPoint: null_mut() };
 
             if unsafe {
-                GetModuleInformation(
-                    handle,
-                    module,
-                    &mut info,
-                    size_of::<MODULEINFO>() as u32,
-                )
-            }.is_err() {
+                GetModuleInformation(handle, module, &mut info, size_of::<MODULEINFO>() as u32)
+            }
+            .is_err()
+            {
                 return Err(InjectorException::new("Failed to get module information"));
             }
 
@@ -186,8 +167,8 @@ pub fn is_64_bit_process(handle: HANDLE) -> Result<bool, InjectorException> {
     }
 
     let mut is_wow64 = BOOL::default();
-    if unsafe { IsWow64Process(handle, &mut is_wow64)}.is_err() {
-        Err(InjectorException::new("Failed to check Wow64 status")) 
+    if unsafe { IsWow64Process(handle, &mut is_wow64) }.is_err() {
+        Err(InjectorException::new("Failed to check Wow64 status"))
     } else {
         Ok(!is_wow64.as_bool() && size_of::<usize>() == 8)
     }

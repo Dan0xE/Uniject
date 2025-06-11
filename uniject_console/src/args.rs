@@ -23,8 +23,7 @@ impl<'a> CommandLineArguments<'a> {
     }
 
     pub fn get_string_arg(&self, name: &str) -> Option<&str> {
-        self.get_arg_index(name)
-            .and_then(|index| self.args.get(index + 1).map(|s| s.as_str()))
+        self.get_arg_index(name).and_then(|index| self.args.get(index + 1).map(|s| s.as_str()))
     }
 
     fn get_arg_index(&self, name: &str) -> Option<usize> {
@@ -39,11 +38,7 @@ impl<'a> CommandLineArguments<'a> {
         <T as TryFrom<i32>>::Error: Debug,
     {
         self.get_string_arg(name).and_then(|str_val| {
-            let value_str = if str_val.starts_with("0x") {
-                &str_val[2..]
-            } else {
-                str_val
-            };
+            let value_str = if str_val.starts_with("0x") { &str_val[2..] } else { str_val };
 
             if radix == 16 {
                 if let Ok(value) = i64::from_str_radix(value_str, 16) {
