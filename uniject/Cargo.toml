@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-winapi = {version = "0.3", features = ["processthreadsapi", "winnt", "memoryapi", "psapi", "winbase", "errhandlingapi", "synchapi", "wow64apiset"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Diagnostics_Debug", "Win32_Security"] }
 sysinfo = "0.30"
 iced-x86 = { version = "1", features = ["code_asm"] }

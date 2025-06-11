@@ -1,15 +1,15 @@
 use std::ffi::CStr;
+use std::mem::size_of;
 use std::ptr::null_mut;
 
 use crate::exported_functions::ExportedFunction;
 use crate::injector_exceptions::InjectorException;
 use crate::memory::Memory;
-use winapi::um::psapi::{EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, LIST_MODULES_ALL};
+use windows::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, MODULEINFO, LIST_MODULES_ALL};
+use windows::Win32::Foundation::{HANDLE, HMODULE};
 use sysinfo::System;
-use winapi::shared::minwindef::{BOOL, DWORD};
-use winapi::um::psapi::MODULEINFO;
-use winapi::um::winnt::HANDLE;
-use winapi::um::wow64apiset::IsWow64Process;
+use windows::core::BOOL;
+use windows::Win32::System::Threading::IsWow64Process;
 
 pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
     let mut system = System::new_all();
@@ -93,13 +93,10 @@ pub fn get_exported_functions(
 }
 
 pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorException> {
-    let is_64_bit = is_64_bit_process(handle)?;
-    let size = if is_64_bit { 8 } else { 4 };
-
-    let mut bytes_needed: DWORD = 0;
+    let mut bytes_needed: u32 = 0;
 
     //get required buffer size
-    let success = unsafe {
+   if unsafe {
         EnumProcessModulesEx(
             handle,
             null_mut(),
@@ -107,20 +104,18 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
             &mut bytes_needed,
             LIST_MODULES_ALL,
         )
-    };
-
-    if success == 0 || bytes_needed == 0 {
+    }.is_err() || bytes_needed == 0 {
         return Err(InjectorException::new(
             "Failed to enumerate process modules",
         ));
     }
 
     //resize buffer
-    let count = bytes_needed as usize / size;
-    let mut ptrs = vec![null_mut(); count];
+    let count = bytes_needed as usize / size_of::<HMODULE>();
+    let mut ptrs: Vec<HMODULE> = vec![HMODULE::default(); count];
 
     //call with allocated buffer
-    let success = unsafe {
+    if unsafe {
         EnumProcessModulesEx(
             handle,
             ptrs.as_mut_ptr(),
@@ -128,21 +123,23 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
             &mut bytes_needed,
             LIST_MODULES_ALL,
         )
-    };
-
-    if success == 0 {
+    }.is_err() {
         return Err(InjectorException::new(
             "Failed to enumerate process modules",
         ))
     }
 
     for &module in ptrs.iter() {
-        let mut path = vec![0i8; 260];
+        let mut path = vec![0u8; 260];
         unsafe {
-            GetModuleFileNameExA(handle, module, path.as_mut_ptr(), 260);
+            GetModuleFileNameExA(Some(handle), Some(module), &mut path);
         }
 
-        let path_str = unsafe { CStr::from_ptr(path.as_ptr()) }
+        if path.is_empty() {
+            continue;
+        }
+
+        let path_str = unsafe { CStr::from_ptr(path.as_ptr() as *const i8) }
             .to_string_lossy()
             .to_lowercase();
 
@@ -153,17 +150,15 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
                 EntryPoint: null_mut(),
             };
 
-            let success = unsafe {
+            if unsafe {
                 GetModuleInformation(
                     handle,
                     module,
                     &mut info,
-                    (size * ptrs.len()) as DWORD,
+                    size_of::<MODULEINFO>() as u32,
                 )
-            };
-
-            if success == 0 {
-                return Err(InjectorException::new(&"Failed to get module information"));
+            }.is_err() {
+                return Err(InjectorException::new("Failed to get module information"));
             }
 
             let funcs = get_exported_functions(handle, info.lpBaseOfDll as usize)?;
@@ -182,12 +177,10 @@ pub fn is_64_bit_process(handle: HANDLE) -> Result<bool, InjectorException> {
         return Ok(false);
     }
 
-    let mut is_wow64: BOOL = 0;
-    let success = unsafe { IsWow64Process(handle, &mut is_wow64) };
-
-    if success == 0 {
-        Err(InjectorException::new("Failed to query Wow64 status"))
+    let mut is_wow64 = BOOL::default();
+    if unsafe { IsWow64Process(handle, &mut is_wow64)}.is_err() {
+        Err(InjectorException::new("Failed to check Wow64 status")) 
     } else {
-        Ok(is_wow64 == 0 && size_of::<usize>() == 8)
+        Ok(!is_wow64.as_bool() && size_of::<usize>() == 8)
     }
 }

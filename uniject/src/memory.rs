@@ -1,9 +1,7 @@
 use std::collections::HashMap;
-use winapi::ctypes::c_void;
-use std::ptr::null_mut;
-use winapi::um::winnt::HANDLE;
-use winapi::um::memoryapi::{ReadProcessMemory, VirtualAllocEx, VirtualFreeEx, WriteProcessMemory};
-use winapi::um::winnt::{MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
+use windows::Win32::System::Memory::{VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE};
 use crate::injector_exceptions::InjectorException;
 
 pub struct Memory {
@@ -13,7 +11,7 @@ pub struct Memory {
 
 impl Memory {
     pub fn new(process_handle: HANDLE) -> Result<Self, InjectorException> {
-        if process_handle.is_null() {
+        if process_handle.0.is_null() {
             Err(InjectorException::new("Invalid process handle"))
         } else {
             Ok(Memory {
@@ -65,20 +63,17 @@ impl Memory {
 
     fn read_bytes(&self, address: usize, size: usize) -> Result<Vec<u8>, InjectorException> {
         let mut buffer = vec![0u8; size];
-        let success = unsafe {
+        match unsafe {
             ReadProcessMemory(
                 self.handle,
-                address as *mut c_void,
-                buffer.as_mut_ptr() as *mut c_void,
+                address as *const std::ffi::c_void,
+                buffer.as_mut_ptr() as *mut std::ffi::c_void,
                 size,
-                null_mut(),
+                None,
             )
-        } != 0;
-
-        if success {
-            Ok(buffer)
-        } else {
-            Err(InjectorException::new("Failed to read process memory"))
+        } {
+            Ok(_) => Ok(buffer),
+            Err(err) => Err(InjectorException::with_inner("Failed to read process memory", Box::new(err))),
         }
     }
 
@@ -87,10 +82,6 @@ impl Memory {
         self.write(addr, data)?;
         Ok(addr)
     }
-
-    // pub fn allocate_and_write_string(&mut self, data: &str) -> Result<usize, InjectorException> {
-    //     self.allocate_and_write(data.as_bytes())
-    // }
 
     pub fn allocate_and_write_int(&mut self, data: i32) -> Result<usize, InjectorException> {
         self.allocate_and_write(&data.to_le_bytes())
@@ -104,7 +95,7 @@ impl Memory {
         let addr = unsafe {
             VirtualAllocEx(
                 self.handle,
-                null_mut(),
+                None,
                 size,
                 MEM_COMMIT | MEM_RESERVE,
                 PAGE_EXECUTE_READWRITE,
@@ -122,20 +113,17 @@ impl Memory {
 
     pub fn write(&self, address: usize, data: &[u8]) -> Result<(), InjectorException> {
         let size = data.len();
-        let success = unsafe {
+        match unsafe {
             WriteProcessMemory(
                 self.handle,
-                address as *mut c_void,
-                data.as_ptr() as *mut c_void,
+                address as *const std::ffi::c_void,
+                data.as_ptr() as *const std::ffi::c_void,
                 size,
-                null_mut(),
+                None,
             )
-        } != 0;
-
-        if success {
-            Ok(())
-        } else {
-            Err(InjectorException::new("Failed to write process memory"))
+        } {
+            Ok(_) => Ok(()),
+            _ => Err(InjectorException::new("Failed to write process memory")),
         }
     }
 }
@@ -144,14 +132,17 @@ impl Drop for Memory {
     fn drop(&mut self) {
         for (&address, &size) in &self.allocations {
             unsafe {
-                VirtualFreeEx(
+                match VirtualFreeEx(
                     self.handle,
-                    address as *mut c_void,
+                    address as *mut std::ffi::c_void,
                     size,
                     MEM_DECOMMIT,
-                );
-            }
-        }
+                ) {
+                    Ok(_) => {},
+                    Err(err) => eprintln!("Failed to free memory at address {:X}: {}", address, err),
+                }
+            } 
+        } 
         self.allocations.clear();
     }
 }

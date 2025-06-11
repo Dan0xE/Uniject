@@ -1,14 +1,11 @@
-use std::{collections::HashMap, ptr::null_mut};
+use std::{collections::HashMap};
 
 use std::sync::LazyLock;
-use winapi::{shared::{minwindef::DWORD, ntdef::HANDLE}};
+use windows::Win32::Foundation::HANDLE;
 
 use crate::{assembler::Assembler, injector_exceptions::InjectorException, memory::Memory, proc_utils::{find_process_id_by_name, get_exported_functions, get_mono_module, is_64_bit_process}, status::MonoImageOpenStatus};
-use winapi::um::handleapi::CloseHandle;
-use winapi::um::processthreadsapi::{CreateRemoteThread, OpenProcess};
-use winapi::um::synchapi::WaitForSingleObject;
-use winapi::um::winbase::WAIT_FAILED;
-use winapi::um::winnt::{PROCESS_ALL_ACCESS};
+use windows::Win32::Foundation::{CloseHandle, WAIT_FAILED};
+use windows::Win32::System::Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS};
 
 static EXPORTS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
     HashMap::from([
@@ -61,8 +58,13 @@ impl Injector {
     }
 
     pub fn new(process_id: u32) -> Result<Self, InjectorException> {
-        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
-        if handle == null_mut() {
+        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, process_id) };
+
+        let Ok(handle) = handle else {
+            return Err(InjectorException::new(&format!("Failed to open process with ID {}", process_id)));
+        };
+
+        if handle.is_invalid() {
             return Err(InjectorException::new(&format!("Failed to open process with ID {}", process_id)));
         }
 
@@ -90,7 +92,7 @@ impl Injector {
         process_handle: HANDLE,
         mono_module: usize,
     ) -> Result<Self, InjectorException> {
-        if process_handle == null_mut() {
+        if process_handle.is_invalid() {
             return Err(InjectorException::new("Argument cannot be zero (processHandle)"));
         }
 
@@ -118,7 +120,12 @@ impl Injector {
 
     pub fn dispose(&mut self) {
         unsafe {
-            CloseHandle(self.handle);
+            match CloseHandle(self.handle) {
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!("Failed to close process handle: {}", err);
+                }
+            }
         }
     }
 
@@ -447,20 +454,24 @@ impl Injector {
         let code = self.assemble(address, ret_val_ptr, args);
         let alloc = self.memory.allocate_and_write(&code)?;
 
-        let mut thread_id: DWORD = 0;
-        let thread: HANDLE = unsafe {
+        let mut thread_id: u32 = 0;
+        let thread = unsafe {
             CreateRemoteThread(
                 self.handle,
-                null_mut(),
+                None,
                 0,
                 Some(std::mem::transmute(alloc)),
-                null_mut(),
+                None,
                 0,
-                &mut thread_id,
+                Some(&mut thread_id),
             )
         };
 
-        if thread == null_mut() {
+        let Ok(thread) = thread else {
+            return Err(InjectorException::new("Failed to create a remote thread"));
+        };
+
+        if thread.is_invalid() {
             return Err(InjectorException::new("Failed to create a remote thread"));
         }
 
