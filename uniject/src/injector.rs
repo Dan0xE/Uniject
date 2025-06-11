@@ -458,7 +458,7 @@ impl Injector {
             self.memory.allocate_and_write_int(0)?
         };
 
-        let code = self.assemble(address, ret_val_ptr, args);
+        let code = self.assemble(address, ret_val_ptr, args)?;
         let alloc = self.memory.allocate_and_write(&code)?;
 
         let mut thread_id: u32 = 0;
@@ -510,7 +510,7 @@ impl Injector {
         Ok(ret)
     }
 
-    pub fn assemble(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Vec<u8> {
+    pub fn assemble(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Result<Vec<u8>, InjectorException> {
         if self.is_64_bit {
             self.assemble_64(function_ptr, ret_val_ptr, args)
         } else {
@@ -518,60 +518,60 @@ impl Injector {
         }
     }
 
-    pub fn assemble_86(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Vec<u8> {
-        let mut asm = Assembler::new();
+    pub fn assemble_86(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Result<Vec<u8>, InjectorException> {
+        let mut asm = Assembler::new()?;
 
         if self.attach {
             if let Some(&mono_thread_attach) = self.exports.get(Self::MONO_THREAD_ATTACH) {
-                asm.push(self.root_domain as isize);
-                asm.mov_eax(mono_thread_attach as isize);
-                asm.call_eax();
-                asm.add_esp(4);
+                asm.push(self.root_domain as isize)?;
+                asm.mov_eax(mono_thread_attach as isize)?;
+                asm.call_eax()?;
+                asm.add_esp(4)?;
             }
         }
 
         for &arg in args.iter().rev() {
-            asm.push(arg as isize);
+            asm.push(arg as isize)?;
         }
 
-        asm.mov_eax(function_ptr as isize);
-        asm.call_eax();
-        asm.add_esp((args.len() * 4) as u8);
-        asm.mov_eax_to(ret_val_ptr);
-        asm.return_();
+        asm.mov_eax(function_ptr as isize)?;
+        asm.call_eax()?;
+        asm.add_esp((args.len() * 4) as u8)?;
+        asm.mov_eax_to(ret_val_ptr)?;
+        asm.return_()?;
 
         asm.to_byte_array()
     }
 
-    pub fn assemble_64(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Vec<u8> {
-        let mut asm = Assembler::new();
+    pub fn assemble_64(&self, function_ptr: usize, ret_val_ptr: usize, args: &[usize]) -> Result<Vec<u8>, InjectorException> {
+        let mut asm = Assembler::new()?;
 
-        asm.sub_rsp(40);
+        asm.sub_rsp(40)?;
 
         if self.attach {
             if let Some(&mono_thread_attach) = self.exports.get(Self::MONO_THREAD_ATTACH) {
-                asm.mov_rax(mono_thread_attach);
-                asm.mov_rcx(self.root_domain);
-                asm.call_rax();
+                asm.mov_rax(mono_thread_attach)?;
+                asm.mov_rcx(self.root_domain)?;
+                asm.call_rax()?;
             }
         }
 
-        asm.mov_rax(function_ptr);
+        asm.mov_rax(function_ptr)?;
 
         for (i, &arg) in args.iter().enumerate() {
             match i {
-                0 => asm.mov_rcx(arg),
-                1 => asm.mov_rdx(arg),
-                2 => asm.mov_r8(arg),
-                3 => asm.mov_r9(arg),
+                0 => asm.mov_rcx(arg)?,
+                1 => asm.mov_rdx(arg)?,
+                2 => asm.mov_r8(arg)?,
+                3 => asm.mov_r9(arg)?,
                 _ => break,
             }
         }
 
-        asm.call_rax();
-        asm.add_rsp(40);
-        asm.mov_rax_to(ret_val_ptr);
-        asm.return_();
+        asm.call_rax()?;
+        asm.add_rsp(40)?;
+        asm.mov_rax_to(ret_val_ptr)?;
+        asm.return_()?;
 
         asm.to_byte_array()
     }

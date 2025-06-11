@@ -32,3 +32,9 @@ impl Error for InjectorException {
         self.inner.as_deref()
     }
 }
+
+impl From<iced_x86::IcedError> for InjectorException {
+    fn from(error: iced_x86::IcedError) -> Self {
+        InjectorException::new(&format!("Assembly error: {}", error))
+    }
+}
