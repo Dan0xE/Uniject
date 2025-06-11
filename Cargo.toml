@@ -1,2 +1,3 @@
 [workspace]
 members = ["uniject", "uniject_console"]
+resolver = "3"
