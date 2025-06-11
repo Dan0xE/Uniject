@@ -1,9 +1,14 @@
 use std::{collections::HashMap, ptr::null_mut};
 
 use std::sync::LazyLock;
-use winapi::{ctypes::c_void, shared::{minwindef::DWORD, ntdef::HANDLE}};
+use winapi::{shared::{minwindef::DWORD, ntdef::HANDLE}};
 
-use crate::{assembler::Assembler, injector_exceptions::InjectorException, memory::Memory, native::{CloseHandle, CreateRemoteThread, OpenProcess, WaitForSingleObject, WaitResult, ProcessAccessRights}, proc_utils::{find_process_id_by_name, get_exported_functions, get_mono_module, is_64_bit_process}, status::MonoImageOpenStatus};
+use crate::{assembler::Assembler, injector_exceptions::InjectorException, memory::Memory, proc_utils::{find_process_id_by_name, get_exported_functions, get_mono_module, is_64_bit_process}, status::MonoImageOpenStatus};
+use winapi::um::handleapi::CloseHandle;
+use winapi::um::processthreadsapi::{CreateRemoteThread, OpenProcess};
+use winapi::um::synchapi::WaitForSingleObject;
+use winapi::um::winbase::WAIT_FAILED;
+use winapi::um::winnt::{PROCESS_ALL_ACCESS};
 
 static EXPORTS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
     HashMap::from([
@@ -56,7 +61,7 @@ impl Injector {
     }
 
     pub fn new(process_id: u32) -> Result<Self, InjectorException> {
-        let handle = unsafe { OpenProcess(ProcessAccessRights::ProcessAllAccess as u32 , 0, process_id) };
+        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
         if handle == null_mut() {
             return Err(InjectorException::new(&format!("Failed to open process with ID {}", process_id)));
         }
@@ -112,7 +117,6 @@ impl Injector {
     }
 
     pub fn dispose(&mut self) {
-        // self.memory.clear_allocations(); //drop should be enough
         unsafe {
             CloseHandle(self.handle);
         }
@@ -246,7 +250,7 @@ impl Injector {
         //execute with pre alloc
         let raw_image = self.execute(
             mono_image_open_from_data_address,
-            &[assembly_data_ptr, assembly.len() as usize, 1, status_ptr],
+            &[assembly_data_ptr, assembly.len(), 1, status_ptr],
         )?;
 
         //read status
@@ -449,7 +453,7 @@ impl Injector {
                 self.handle,
                 null_mut(),
                 0,
-                alloc as *mut c_void,
+                Some(std::mem::transmute(alloc)),
                 null_mut(),
                 0,
                 &mut thread_id,
@@ -461,7 +465,7 @@ impl Injector {
         }
 
         let wait_result = unsafe { WaitForSingleObject(thread, u32::MAX) };
-        if wait_result == WaitResult::WaitFailed as DWORD {
+        if wait_result == WAIT_FAILED {
             return Err(InjectorException::new("Failed to wait for a remote thread"));
         }
 
@@ -515,7 +519,7 @@ impl Injector {
         asm.mov_eax(function_ptr as isize);
         asm.call_eax();
         asm.add_esp((args.len() * 4) as u8);
-        asm.mov_eax_to(ret_val_ptr as usize);
+        asm.mov_eax_to(ret_val_ptr);
         asm.return_();
 
         asm.to_byte_array()

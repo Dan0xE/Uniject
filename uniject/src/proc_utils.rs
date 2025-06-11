@@ -1,17 +1,15 @@
 use std::ffi::CStr;
-use std::mem;
 use std::ptr::null_mut;
 
 use crate::exported_functions::ExportedFunction;
 use crate::injector_exceptions::InjectorException;
 use crate::memory::Memory;
-use crate::native::{
-    EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, IsWow64Process, ModuleFilter,
-};
+use winapi::um::psapi::{EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, LIST_MODULES_ALL};
 use sysinfo::System;
 use winapi::shared::minwindef::{BOOL, DWORD};
 use winapi::um::psapi::MODULEINFO;
 use winapi::um::winnt::HANDLE;
+use winapi::um::wow64apiset::IsWow64Process;
 
 pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
     let mut system = System::new_all();
@@ -45,7 +43,7 @@ pub fn get_exported_functions(
     let data_directory = optional_header + if is_64_bit { 0x70 } else { 0x60 };
 
     let export_directory = mod_address
-        + memory.read_int(data_directory as usize).map_err(|err| {
+        + memory.read_int(data_directory).map_err(|err| {
             InjectorException::with_inner("Failed to read export directory", Box::new(err))
         })? as usize;
 
@@ -107,7 +105,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
             null_mut(),
             0,
             &mut bytes_needed,
-            ModuleFilter::ListModulesAll as DWORD,
+            LIST_MODULES_ALL,
         )
     };
 
@@ -128,7 +126,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
             ptrs.as_mut_ptr(),
             bytes_needed,
             &mut bytes_needed,
-            ModuleFilter::ListModulesAll as DWORD,
+            LIST_MODULES_ALL,
         )
     };
 
@@ -141,7 +139,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
     for &module in ptrs.iter() {
         let mut path = vec![0i8; 260];
         unsafe {
-            GetModuleFileNameExA(handle, module as HANDLE, path.as_mut_ptr(), 260);
+            GetModuleFileNameExA(handle, module, path.as_mut_ptr(), 260);
         }
 
         let path_str = unsafe { CStr::from_ptr(path.as_ptr()) }
@@ -158,7 +156,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
             let success = unsafe {
                 GetModuleInformation(
                     handle,
-                    module as HANDLE,
+                    module,
                     &mut info,
                     (size * ptrs.len()) as DWORD,
                 )
@@ -190,6 +188,6 @@ pub fn is_64_bit_process(handle: HANDLE) -> Result<bool, InjectorException> {
     if success == 0 {
         Err(InjectorException::new("Failed to query Wow64 status"))
     } else {
-        Ok(is_wow64 == 0 && mem::size_of::<usize>() == 8)
+        Ok(is_wow64 == 0 && size_of::<usize>() == 8)
     }
 }

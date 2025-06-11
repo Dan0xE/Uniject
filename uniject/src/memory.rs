@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use winapi::ctypes::c_void;
 use std::ptr::null_mut;
 use winapi::um::winnt::HANDLE;
-use crate::native::{AllocationType, MemoryFreeType, MemoryProtection, ReadProcessMemory, VirtualAllocEx, VirtualFreeEx, WriteProcessMemory};
+use winapi::um::memoryapi::{ReadProcessMemory, VirtualAllocEx, VirtualFreeEx, WriteProcessMemory};
+use winapi::um::winnt::{MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE};
 use crate::injector_exceptions::InjectorException;
 
 pub struct Memory {
@@ -63,15 +64,14 @@ impl Memory {
     }
 
     fn read_bytes(&self, address: usize, size: usize) -> Result<Vec<u8>, InjectorException> {
-        let size_u32: u32 = size.try_into().map_err(|_| InjectorException::new("Failed to convert size to u32"))?;
         let mut buffer = vec![0u8; size];
         let success = unsafe {
             ReadProcessMemory(
                 self.handle,
                 address as *mut c_void,
                 buffer.as_mut_ptr() as *mut c_void,
-                size_u32,
-                std::ptr::null_mut(),
+                size,
+                null_mut(),
             )
         } != 0;
 
@@ -101,14 +101,13 @@ impl Memory {
     }
 
     pub fn allocate(&mut self, size: usize) -> Result<usize, InjectorException> {
-        let size_u32: u32 = size.try_into().map_err(|_| InjectorException::new("Failed to convert size to u32"))?;
         let addr = unsafe {
             VirtualAllocEx(
                 self.handle,
                 null_mut(),
-                size_u32,
-                AllocationType::MemCommit as u32 | AllocationType::MemReserve as u32,
-                MemoryProtection::PAGE_EXECUTE_READWRITE.bits(),
+                size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_EXECUTE_READWRITE,
             )
         } as usize;
 
@@ -122,14 +121,14 @@ impl Memory {
     }
 
     pub fn write(&self, address: usize, data: &[u8]) -> Result<(), InjectorException> {
-        let size_u32: u32 = data.len().try_into().map_err(|_| InjectorException::new("Failed to convert size to u32"))?;
+        let size = data.len();
         let success = unsafe {
             WriteProcessMemory(
                 self.handle,
                 address as *mut c_void,
                 data.as_ptr() as *mut c_void,
-                size_u32,
-                std::ptr::null_mut(),
+                size,
+                null_mut(),
             )
         } != 0;
 
@@ -139,35 +138,17 @@ impl Memory {
             Err(InjectorException::new("Failed to write process memory"))
         }
     }
-
-    //drop should be enough 
-    // pub fn clear_allocations(&mut self) {
-    //     for (&address, &size) in &self.allocations {
-    //         let size_u32: u32 = size.try_into().unwrap_or(0);
-    //         unsafe {
-    //             VirtualFreeEx(
-    //                 self.handle,
-    //                 address as *mut c_void,
-    //                 size_u32,
-    //                 MemoryFreeType::MemDecommit as u32,
-    //             );
-    //         }
-    //     }
-    //     self.allocations.clear();
-    // }
-
 }
 
 impl Drop for Memory {
     fn drop(&mut self) {
         for (&address, &size) in &self.allocations {
-            let size_u32: u32 = size.try_into().unwrap_or(0);
             unsafe {
                 VirtualFreeEx(
                     self.handle,
                     address as *mut c_void,
-                    size_u32,
-                    MemoryFreeType::MemDecommit as u32,
+                    size,
+                    MEM_DECOMMIT,
                 );
             }
         }
