@@ -1,14 +1,12 @@
-use std::ffi::CStr;
 use std::mem::size_of;
 use std::ptr::null_mut;
 
 use sysinfo::{ProcessesToUpdate, System};
-use windows::Win32::Foundation::{HANDLE, HMODULE};
-use windows::Win32::System::ProcessStatus::{
+use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE};
+use windows_sys::Win32::System::ProcessStatus::{
     EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO,
 };
-use windows::Win32::System::Threading::IsWow64Process;
-use windows::core::BOOL;
+use windows_sys::Win32::System::Threading::IsWow64Process;
 
 use crate::exported_functions::ExportedFunction;
 use crate::injector_exceptions::InjectorException;
@@ -100,7 +98,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
 
     //get required buffer size
     if unsafe { EnumProcessModulesEx(handle, null_mut(), 0, &mut bytes_needed, LIST_MODULES_ALL) }
-        .is_err()
+        == 0
         || bytes_needed == 0
     {
         return Err(InjectorException::new("Failed to enumerate process modules"));
@@ -108,7 +106,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
 
     //resize buffer
     let count = bytes_needed as usize / size_of::<HMODULE>();
-    let mut ptrs: Vec<HMODULE> = vec![HMODULE::default(); count];
+    let mut ptrs: Vec<HMODULE> = vec![null_mut(); count];
 
     //call with allocated buffer
     if unsafe {
@@ -119,24 +117,22 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
             &mut bytes_needed,
             LIST_MODULES_ALL,
         )
-    }
-    .is_err()
+    } == 0
     {
         return Err(InjectorException::new("Failed to enumerate process modules"));
     }
 
     for &module in ptrs.iter() {
         let mut path = vec![0u8; 260];
-        unsafe {
-            GetModuleFileNameExA(Some(handle), Some(module), &mut path);
-        }
+        let path_len =
+            unsafe { GetModuleFileNameExA(handle, module, path.as_mut_ptr(), path.len() as u32) }
+                as usize;
 
-        if path.is_empty() {
+        if path_len == 0 {
             continue;
         }
 
-        let path_str =
-            unsafe { CStr::from_ptr(path.as_ptr() as *const i8) }.to_string_lossy().to_lowercase();
+        let path_str = String::from_utf8_lossy(&path[..path_len]).to_lowercase();
 
         if path_str.contains("mono") {
             let mut info: MODULEINFO =
@@ -144,8 +140,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
 
             if unsafe {
                 GetModuleInformation(handle, module, &mut info, size_of::<MODULEINFO>() as u32)
-            }
-            .is_err()
+            } == 0
             {
                 return Err(InjectorException::new("Failed to get module information"));
             }
@@ -167,9 +162,9 @@ pub fn is_64_bit_process(handle: HANDLE) -> Result<bool, InjectorException> {
     }
 
     let mut is_wow64 = BOOL::default();
-    if unsafe { IsWow64Process(handle, &mut is_wow64) }.is_err() {
+    if unsafe { IsWow64Process(handle, &mut is_wow64) } == 0 {
         Err(InjectorException::new("Failed to check Wow64 status"))
     } else {
-        Ok(!is_wow64.as_bool() && size_of::<usize>() == 8)
+        Ok(is_wow64 == 0 && size_of::<usize>() == 8)
     }
 }

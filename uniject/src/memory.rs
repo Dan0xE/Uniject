@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use windows::Win32::Foundation::HANDLE;
-use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
-use windows::Win32::System::Memory::{
+use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
+use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx, VirtualFreeEx,
 };
 
@@ -15,7 +15,7 @@ pub struct Memory {
 
 impl Memory {
     pub fn new(process_handle: HANDLE) -> Result<Self, InjectorException> {
-        if process_handle.0.is_null() {
+        if process_handle.is_null() {
             Err(InjectorException::new("Invalid process handle"))
         } else {
             Ok(Memory { handle: process_handle, allocations: HashMap::new() })
@@ -68,19 +68,22 @@ impl Memory {
 
     fn read_bytes(&self, address: usize, size: usize) -> Result<Vec<u8>, InjectorException> {
         let mut buffer = vec![0u8; size];
-        match unsafe {
+        if unsafe {
             ReadProcessMemory(
                 self.handle,
                 address as *const std::ffi::c_void,
                 buffer.as_mut_ptr() as *mut std::ffi::c_void,
                 size,
-                None,
+                std::ptr::null_mut(),
             )
-        } {
-            Ok(_) => Ok(buffer),
-            Err(err) => {
-                Err(InjectorException::with_inner("Failed to read process memory", Box::new(err)))
-            }
+        } != 0
+        {
+            Ok(buffer)
+        } else {
+            Err(InjectorException::with_inner(
+                "Failed to read process memory",
+                Box::new(std::io::Error::last_os_error()),
+            ))
         }
     }
 
@@ -102,7 +105,7 @@ impl Memory {
         let addr = unsafe {
             VirtualAllocEx(
                 self.handle,
-                None,
+                std::ptr::null(),
                 size,
                 MEM_COMMIT | MEM_RESERVE,
                 PAGE_EXECUTE_READWRITE,
@@ -119,17 +122,19 @@ impl Memory {
 
     pub fn write(&self, address: usize, data: &[u8]) -> Result<(), InjectorException> {
         let size = data.len();
-        match unsafe {
+        if unsafe {
             WriteProcessMemory(
                 self.handle,
                 address as *const std::ffi::c_void,
                 data.as_ptr() as *const std::ffi::c_void,
                 size,
-                None,
+                std::ptr::null_mut(),
             )
-        } {
-            Ok(_) => Ok(()),
-            _ => Err(InjectorException::new("Failed to write process memory")),
+        } != 0
+        {
+            Ok(())
+        } else {
+            Err(InjectorException::new("Failed to write process memory"))
         }
     }
 }
@@ -138,16 +143,13 @@ impl Drop for Memory {
     fn drop(&mut self) {
         for (&address, &size) in &self.allocations {
             unsafe {
-                match VirtualFreeEx(
-                    self.handle,
-                    address as *mut std::ffi::c_void,
-                    size,
-                    MEM_DECOMMIT,
-                ) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        eprintln!("Failed to free memory at address {address:X}: {err}")
-                    }
+                if VirtualFreeEx(self.handle, address as *mut std::ffi::c_void, size, MEM_DECOMMIT)
+                    == 0
+                {
+                    eprintln!(
+                        "Failed to free memory at address {address:X}: {}",
+                        std::io::Error::last_os_error()
+                    )
                 }
             }
         }

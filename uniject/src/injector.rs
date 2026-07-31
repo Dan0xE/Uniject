@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_FAILED};
-use windows::Win32::System::Threading::{
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
+use windows_sys::Win32::System::Threading::{
     CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject,
 };
 
@@ -66,15 +66,9 @@ impl Injector {
     }
 
     pub fn new(process_id: u32) -> Result<Self, InjectorException> {
-        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, process_id) };
+        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
 
-        let Ok(handle) = handle else {
-            return Err(InjectorException::new(&format!(
-                "Failed to open process with ID {process_id}"
-            )));
-        };
-
-        if handle.is_invalid() {
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return Err(InjectorException::new(&format!(
                 "Failed to open process with ID {process_id}"
             )));
@@ -106,7 +100,7 @@ impl Injector {
         process_handle: HANDLE,
         mono_module: usize,
     ) -> Result<Self, InjectorException> {
-        if process_handle.is_invalid() {
+        if process_handle.is_null() || process_handle == INVALID_HANDLE_VALUE {
             return Err(InjectorException::new("Argument cannot be zero (processHandle)"));
         }
 
@@ -133,11 +127,8 @@ impl Injector {
 
     pub fn dispose(&mut self) {
         unsafe {
-            match CloseHandle(self.handle) {
-                Ok(_) => {}
-                Err(err) => {
-                    eprintln!("Failed to close process handle: {err}");
-                }
+            if CloseHandle(self.handle) == 0 {
+                eprintln!("Failed to close process handle: {}", std::io::Error::last_os_error());
             }
         }
     }
@@ -460,23 +451,19 @@ impl Injector {
         let thread = unsafe {
             CreateRemoteThread(
                 self.handle,
-                None,
+                std::ptr::null(),
                 0,
                 Some(std::mem::transmute::<
                     usize,
                     unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
                 >(alloc)),
-                None,
+                std::ptr::null(),
                 0,
-                Some(&mut thread_id),
+                &mut thread_id,
             )
         };
 
-        let Ok(thread) = thread else {
-            return Err(InjectorException::new("Failed to create a remote thread"));
-        };
-
-        if thread.is_invalid() {
+        if thread.is_null() || thread == INVALID_HANDLE_VALUE {
             return Err(InjectorException::new("Failed to create a remote thread"));
         }
 
