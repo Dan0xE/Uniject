@@ -9,10 +9,9 @@ use windows_sys::Win32::System::Threading::{
 use crate::assembler::Assembler;
 use crate::injector_exceptions::InjectorException;
 use crate::memory::Memory;
-use crate::proc_utils::{
+use crate::process::{
     find_process_id_by_name, get_exported_functions, get_mono_module, is_64_bit_process,
 };
-use crate::status::MonoImageOpenStatus;
 
 static EXPORTS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
     HashMap::from([
@@ -30,6 +29,25 @@ static EXPORTS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
         ("mono_class_get_name", 0),
     ])
 });
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum MonoImageOpenStatus {
+    Ok,
+    ErrorErrno,
+    MissingAssemblyRef,
+    Invalid,
+}
+
+impl From<i32> for MonoImageOpenStatus {
+    fn from(value: i32) -> Self {
+        match value {
+            0 => MonoImageOpenStatus::Ok,
+            1 => MonoImageOpenStatus::ErrorErrno,
+            2 => MonoImageOpenStatus::MissingAssemblyRef,
+            _ => MonoImageOpenStatus::Invalid,
+        }
+    }
+}
 
 pub struct Injector {
     handle: HANDLE,
