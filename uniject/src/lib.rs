@@ -1,5 +1,4 @@
 mod assembler;
-mod exported_functions;
 mod injector;
 mod injector_exceptions;
 mod memory;

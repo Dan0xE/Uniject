@@ -10,9 +10,19 @@ use windows_sys::Win32::System::ProcessStatus::{
 };
 use windows_sys::Win32::System::Threading::IsWow64Process;
 
-use crate::exported_functions::ExportedFunction;
 use crate::injector_exceptions::InjectorException;
 use crate::memory::Memory;
+
+pub struct ExportedFunction {
+    pub name: String,
+    pub address: usize,
+}
+
+impl ExportedFunction {
+    pub fn new(name: &str, address: usize) -> Self {
+        ExportedFunction { name: name.to_string(), address }
+    }
+}
 
 pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
     let process_name = process_name.to_lowercase();
