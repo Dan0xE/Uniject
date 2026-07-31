@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use log::error;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows::Win32::System::Memory::{
@@ -147,7 +146,7 @@ impl Drop for Memory {
                 ) {
                     Ok(_) => {}
                     Err(err) => {
-                        error!("Failed to free memory at address {address:X}: {err}")
+                        eprintln!("Failed to free memory at address {address:X}: {err}")
                     }
                 }
             }

@@ -363,7 +363,6 @@ name = "uniject"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "log",
  "sysinfo",
  "windows",
 ]
