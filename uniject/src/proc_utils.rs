@@ -1,8 +1,10 @@
 use std::mem::size_of;
 use std::ptr::null_mut;
 
-use sysinfo::{ProcessesToUpdate, System};
-use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE};
+use windows_sys::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows_sys::Win32::System::ProcessStatus::{
     EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO,
 };
@@ -13,20 +15,44 @@ use crate::injector_exceptions::InjectorException;
 use crate::memory::Memory;
 
 pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
-    let process_name_lower = if process_name.to_lowercase().ends_with(".exe") {
-        process_name.to_lowercase()
-    } else {
-        format!("{}.exe", process_name.to_lowercase())
-    };
+    let process_name = process_name.to_lowercase();
+    let process_name =
+        if process_name.ends_with(".exe") { process_name } else { format!("{process_name}.exe") };
 
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::All, true);
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return None;
+    }
 
-    system
-        .processes()
-        .values()
-        .find(|process| process.name().to_string_lossy().to_lowercase() == process_name_lower)
-        .map(|process| process.pid().as_u32())
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+
+    let mut process_id = None;
+    if unsafe { Process32FirstW(snapshot, &mut entry) } != 0 {
+        loop {
+            let name_len = entry
+                .szExeFile
+                .iter()
+                .position(|&character| character == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..name_len]).to_lowercase();
+
+            if name == process_name {
+                process_id = Some(entry.th32ProcessID);
+                break;
+            }
+
+            if unsafe { Process32NextW(snapshot, &mut entry) } == 0 {
+                break;
+            }
+        }
+    }
+
+    unsafe {
+        CloseHandle(snapshot);
+    }
+
+    process_id
 }
 
 pub fn get_exported_functions(
