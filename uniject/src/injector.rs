@@ -96,35 +96,6 @@ impl Injector {
         })
     }
 
-    pub fn new_with_handle(
-        process_handle: HANDLE,
-        mono_module: usize,
-    ) -> Result<Self, InjectorException> {
-        if process_handle.is_null() || process_handle == INVALID_HANDLE_VALUE {
-            return Err(InjectorException::new("Argument cannot be zero (processHandle)"));
-        }
-
-        if mono_module == 0 {
-            return Err(InjectorException::new("Argument cannot be zero (monoModule)"));
-        }
-
-        let is_64_bit = is_64_bit_process(process_handle)?;
-
-        let memory = Memory::new(process_handle).map_err(|err| {
-            InjectorException::with_inner("Failed to create memory handler", Box::new(err))
-        })?;
-
-        Ok(Injector {
-            handle: process_handle,
-            memory,
-            exports: EXPORTS.clone(),
-            root_domain: 0,
-            attach: false,
-            mono_module,
-            is_64_bit,
-        })
-    }
-
     pub fn dispose(&mut self) {
         unsafe {
             if CloseHandle(self.handle) == 0 {
