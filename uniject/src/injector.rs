@@ -127,7 +127,7 @@ impl Injector {
 
         for ef in exported_functions {
             if let Some(export) = self.exports.get_mut(&*ef.name) {
-                *export = ef.address;
+                *export = ef.address.get();
             }
         }
 

@@ -1,4 +1,5 @@
 use std::mem::size_of;
+use std::num::NonZeroUsize;
 use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
@@ -15,11 +16,11 @@ use crate::memory::Memory;
 
 pub struct ExportedFunction {
     pub name: String,
-    pub address: usize,
+    pub address: NonZeroUsize,
 }
 
 impl ExportedFunction {
-    pub fn new(name: &str, address: usize) -> Self {
+    pub fn new(name: &str, address: NonZeroUsize) -> Self {
         ExportedFunction { name: name.to_string(), address }
     }
 }
@@ -90,9 +91,14 @@ pub fn get_exported_functions(
         let offset = memory.read_int(names + i as usize * 4)? as usize;
         let name = memory.read_string(mod_address + offset as usize, 32)?;
         let ordinal = memory.read_short(ordinals + i as usize * 2)?;
-        let address = mod_address + memory.read_int(functions + ordinal as usize * 4)? as usize;
-        if address != 0 {
-            exported_functions.push(ExportedFunction::new(&name, address));
+
+        let address = NonZeroUsize::new(
+            mod_address + memory.read_int(functions + ordinal as usize * 4)? as usize,
+        );
+
+        if address.is_some() {
+            // SAFETY: Address is guaranteed to be non-zero, so unwrap is safe here.
+            exported_functions.push(ExportedFunction::new(&name, address.unwrap()));
         }
     }
 
