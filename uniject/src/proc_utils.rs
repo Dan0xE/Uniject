@@ -72,55 +72,25 @@ pub fn get_exported_functions(
     let mut exported_functions = Vec::new();
     let is_64_bit = is_64_bit_process(handle)?;
 
-    let memory = Memory::new(handle).map_err(|err| {
-        InjectorException::with_inner("Failed to create memory handler", Box::new(err))
-    })?;
-
+    let memory = Memory::new(handle)?;
     //nt header offset
-    let e_lfanew = memory.read_int(mod_address + 0x3C).map_err(|err| {
-        InjectorException::with_inner("Failed to read NT headers offset", Box::new(err))
-    })?;
+    let e_lfanew = memory.read_int(mod_address + 0x3C)? as usize;
     let nt_headers = mod_address + e_lfanew as usize;
 
     let optional_header = nt_headers + 0x18;
     let data_directory = optional_header + if is_64_bit { 0x70 } else { 0x60 };
 
-    let export_directory = mod_address
-        + memory.read_int(data_directory).map_err(|err| {
-            InjectorException::with_inner("Failed to read export directory", Box::new(err))
-        })? as usize;
-
-    let names = mod_address
-        + memory.read_int(export_directory + 0x20).map_err(|err| {
-            InjectorException::with_inner("Failed to read names pointer", Box::new(err))
-        })? as usize;
-    let ordinals = mod_address
-        + memory.read_int(export_directory + 0x24).map_err(|err| {
-            InjectorException::with_inner("Failed to read ordinals pointer", Box::new(err))
-        })? as usize;
-    let functions = mod_address
-        + memory.read_int(export_directory + 0x1C).map_err(|err| {
-            InjectorException::with_inner("Failed to read functions pointer", Box::new(err))
-        })? as usize;
-    let count = memory.read_int(export_directory + 0x18).map_err(|err| {
-        InjectorException::with_inner("Failed to read functions count", Box::new(err))
-    })?;
+    let export_directory = mod_address + memory.read_int(data_directory)? as usize;
+    let names = mod_address + memory.read_int(export_directory + 0x20)? as usize;
+    let ordinals = mod_address + memory.read_int(export_directory + 0x24)? as usize;
+    let functions = mod_address + memory.read_int(export_directory + 0x1C)? as usize;
+    let count = memory.read_int(export_directory + 0x18)? as usize;
 
     for i in 0..count {
-        let offset = memory.read_int(names + i as usize * 4).map_err(|err| {
-            InjectorException::with_inner("Failed to read function name offset", Box::new(err))
-        })?;
-        let name = memory.read_string(mod_address + offset as usize, 32).map_err(|err| {
-            InjectorException::with_inner("Failed to read function name", Box::new(err))
-        })?;
-        let ordinal = memory.read_short(ordinals + i as usize * 2).map_err(|err| {
-            InjectorException::with_inner("Failed to read function ordinal", Box::new(err))
-        })?;
-        let address = mod_address
-            + memory.read_int(functions + ordinal as usize * 4).map_err(|err| {
-                InjectorException::with_inner("Failed to read function address", Box::new(err))
-            })? as usize;
-
+        let offset = memory.read_int(names + i as usize * 4)? as usize;
+        let name = memory.read_string(mod_address + offset as usize, 32)?;
+        let ordinal = memory.read_short(ordinals + i as usize * 2)?;
+        let address = mod_address + memory.read_int(functions + ordinal as usize * 4)? as usize;
         if address != 0 {
             exported_functions.push(ExportedFunction::new(&name, address));
         }
