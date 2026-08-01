@@ -54,6 +54,20 @@ impl Injector {
     const MONO_IMAGE_STRERROR: &'static str = "mono_image_strerror";
     const MONO_OBJECT_GET_CLASS: &'static str = "mono_object_get_class";
     const MONO_CLASS_GET_NAME: &'static str = "mono_class_get_name";
+    const REQUIRED_MONO_EXPORTS: [&'static str; 12] = [
+        Self::MONO_GET_ROOT_DOMAIN,
+        Self::MONO_THREAD_ATTACH,
+        Self::MONO_IMAGE_OPEN_FROM_DATA,
+        Self::MONO_ASSEMBLY_LOAD_FROM_FULL,
+        Self::MONO_ASSEMBLY_GET_IMAGE,
+        Self::MONO_CLASS_FROM_NAME,
+        Self::MONO_CLASS_GET_METHOD_FROM_NAME,
+        Self::MONO_RUNTIME_INVOKE,
+        Self::MONO_ASSEMBLY_CLOSE,
+        Self::MONO_IMAGE_STRERROR,
+        Self::MONO_OBJECT_GET_CLASS,
+        Self::MONO_CLASS_GET_NAME,
+    ];
 
     pub fn new(process_id: u32) -> Result<Self> {
         let raw_handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
@@ -84,38 +98,20 @@ impl Injector {
         };
 
         let mono_module =
-            get_mono_module(handle.as_handle(), is_64_bit)?.ok_or(Error::MonoModuleNotFound)?;
+            get_mono_module(handle.as_handle(), is_64_bit, &Self::REQUIRED_MONO_EXPORTS)?
+                .ok_or(Error::MonoModuleNotFound)?;
 
-        let exports = [
-            Self::MONO_GET_ROOT_DOMAIN,
-            Self::MONO_THREAD_ATTACH,
-            Self::MONO_IMAGE_OPEN_FROM_DATA,
-            Self::MONO_ASSEMBLY_LOAD_FROM_FULL,
-            Self::MONO_ASSEMBLY_GET_IMAGE,
-            Self::MONO_CLASS_FROM_NAME,
-            Self::MONO_CLASS_GET_METHOD_FROM_NAME,
-            Self::MONO_RUNTIME_INVOKE,
-            Self::MONO_ASSEMBLY_CLOSE,
-            Self::MONO_IMAGE_STRERROR,
-            Self::MONO_OBJECT_GET_CLASS,
-            Self::MONO_CLASS_GET_NAME,
-        ]
-        .into_iter()
-        .map(|name| {
-            mono_module
-                .exports
-                .iter()
-                .find(|export| export.name == name)
-                .map(|export| (name, export.address))
-                .ok_or(Error::MissingExport { name, module: mono_module.address })
-        })
-        .collect::<Result<HashMap<_, _>>>()?;
+        for name in Self::REQUIRED_MONO_EXPORTS {
+            if !mono_module.exports.contains_key(name) {
+                return Err(Error::MissingExport { name, module: mono_module.address });
+            }
+        }
 
         let memory = Memory::new(handle);
 
         Ok(Injector {
             memory,
-            exports,
+            exports: mono_module.exports,
             root_domain: None,
             attach: false,
             mono_module: mono_module.address,

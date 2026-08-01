@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::os::windows::io::{AsRawHandle, BorrowedHandle};
@@ -11,21 +12,17 @@ use windows_sys::Win32::System::ProcessStatus::{
 use crate::error::{Error, Result};
 use crate::memory::{Memory, checked_add, checked_mul};
 
-pub(crate) struct ExportedFunction {
-    pub(crate) name: String,
-    pub(crate) address: NonZeroUsize,
-}
-
 pub(crate) struct MonoModule {
     pub(crate) address: NonZeroUsize,
-    pub(crate) exports: Vec<ExportedFunction>,
+    pub(crate) exports: HashMap<&'static str, NonZeroUsize>,
 }
 
 fn get_exported_functions(
     handle: BorrowedHandle<'_>,
     mod_address: NonZeroUsize,
     is_64_bit: bool,
-) -> Result<Vec<ExportedFunction>> {
+    required_exports: &[&'static str],
+) -> Result<HashMap<&'static str, NonZeroUsize>> {
     let memory = Memory::new(handle);
     //nt header offset
     let e_lfanew = usize::try_from(memory.read_int(checked_add(mod_address, 0x3C)?)?)?;
@@ -45,7 +42,7 @@ fn get_exported_functions(
     let name_count = memory.read_uint(checked_add(export_directory, 0x18)?)? as usize;
 
     if name_count == 0 {
-        return Ok(Vec::new());
+        return Ok(HashMap::new());
     }
 
     let names_size = NonZeroUsize::new(checked_mul(name_count, size_of::<u32>())?)
@@ -60,12 +57,16 @@ fn get_exported_functions(
         None => Vec::new(),
     };
 
-    let mut exported_functions = Vec::with_capacity(name_count);
-    for (name, ordinal) in
+    let mut exported_functions = HashMap::with_capacity(required_exports.len());
+    'exports: for (name, ordinal) in
         names.chunks_exact(size_of::<u32>()).zip(ordinals.chunks_exact(size_of::<u16>()))
     {
         let offset = u32::from_le_bytes([name[0], name[1], name[2], name[3]]) as usize;
         let name = memory.read_string(checked_add(mod_address, offset)?, 32)?;
+
+        let Some(&name) = required_exports.iter().find(|&&required| required == name) else {
+            continue;
+        };
 
         let ordinal = u16::from_le_bytes([ordinal[0], ordinal[1]]);
         if usize::from(ordinal) >= function_count {
@@ -80,7 +81,11 @@ fn get_exported_functions(
             functions[function_offset + 3],
         ]);
         let address = checked_add(mod_address, function_rva as usize)?;
-        exported_functions.push(ExportedFunction { name, address });
+        exported_functions.insert(name, address);
+
+        if exported_functions.len() == required_exports.len() {
+            break 'exports;
+        }
     }
 
     Ok(exported_functions)
@@ -89,6 +94,7 @@ fn get_exported_functions(
 pub(crate) fn get_mono_module(
     handle: BorrowedHandle<'_>,
     is_64_bit: bool,
+    required_exports: &[&'static str],
 ) -> Result<Option<MonoModule>> {
     let mut bytes_needed: u32 = 0;
     let raw_handle = handle.as_raw_handle() as HANDLE;
@@ -154,9 +160,10 @@ pub(crate) fn get_mono_module(
 
             let module_address =
                 NonZeroUsize::new(info.lpBaseOfDll as usize).ok_or(Error::NullModuleBase)?;
-            let exports = get_exported_functions(handle, module_address, is_64_bit)?;
+            let exports =
+                get_exported_functions(handle, module_address, is_64_bit, required_exports)?;
 
-            if exports.iter().any(|export| export.name == "mono_get_root_domain") {
+            if exports.contains_key("mono_get_root_domain") {
                 return Ok(Some(MonoModule { address: module_address, exports }));
             }
         }
