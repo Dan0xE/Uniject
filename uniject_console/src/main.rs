@@ -1,3 +1,6 @@
+mod process;
+
+use std::error::Error;
 use std::fmt::Display;
 use std::fs;
 use std::num::NonZeroUsize;
@@ -6,7 +9,9 @@ use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use log::{error, info};
-use uniject::{Injector, Result, find_process_id_by_name};
+use uniject::Injector;
+
+use crate::process::find_process_id_by_name;
 
 #[derive(Parser)]
 #[command(name = "uniject_console")]
@@ -57,7 +62,7 @@ enum Commands {
     },
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<(), Box<dyn Error>> {
     env_logger::Builder::from_default_env().filter_level(log::LevelFilter::Debug).init();
     let cli = Cli::parse();
 

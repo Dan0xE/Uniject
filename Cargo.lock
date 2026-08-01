@@ -352,6 +352,7 @@ dependencies = [
  "env_logger",
  "log",
  "uniject",
+ "windows-sys",
 ]
 
 [[package]]

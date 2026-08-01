@@ -1,12 +1,9 @@
 use std::mem::size_of;
 use std::num::NonZeroUsize;
-use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, BorrowedHandle};
 use std::ptr::null_mut;
 
-use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
-};
+use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE};
 use windows_sys::Win32::System::ProcessStatus::{
     EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO,
 };
@@ -23,49 +20,6 @@ pub(crate) struct ExportedFunction {
 pub(crate) struct MonoModule {
     pub(crate) address: NonZeroUsize,
     pub(crate) exports: Vec<ExportedFunction>,
-}
-
-pub fn find_process_id_by_name(process_name: &str) -> Result<u32> {
-    let requested_name = process_name.to_owned();
-    let process_name = process_name.to_lowercase();
-    let process_name =
-        if process_name.ends_with(".exe") { process_name } else { format!("{process_name}.exe") };
-
-    let raw_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    if raw_snapshot == INVALID_HANDLE_VALUE {
-        return Err(Error::Windows {
-            operation: "failed to create process snapshot",
-            source: std::io::Error::last_os_error(),
-        });
-    }
-    // SAFETY: CreateToolhelp32Snapshot returned a valid, owned handle.
-    let snapshot = unsafe { OwnedHandle::from_raw_handle(raw_snapshot) };
-
-    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
-    entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
-
-    let mut process_id = None;
-    if unsafe { Process32FirstW(snapshot.as_raw_handle() as HANDLE, &mut entry) } != 0 {
-        loop {
-            let name_len = entry
-                .szExeFile
-                .iter()
-                .position(|&character| character == 0)
-                .unwrap_or(entry.szExeFile.len());
-            let name = String::from_utf16_lossy(&entry.szExeFile[..name_len]).to_lowercase();
-
-            if name == process_name {
-                process_id = Some(entry.th32ProcessID);
-                break;
-            }
-
-            if unsafe { Process32NextW(snapshot.as_raw_handle() as HANDLE, &mut entry) } == 0 {
-                break;
-            }
-        }
-    }
-
-    process_id.ok_or(Error::ProcessNotFound { name: requested_name })
 }
 
 fn get_exported_functions(

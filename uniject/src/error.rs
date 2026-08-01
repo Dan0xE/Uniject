@@ -23,9 +23,6 @@ pub enum Error {
         source: io::Error,
     },
 
-    #[error("could not find a process named {name}")]
-    ProcessNotFound { name: String },
-
     #[error("Mono module not found")]
     MonoModuleNotFound,
 
