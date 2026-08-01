@@ -154,7 +154,7 @@ impl Injector {
             return Err(Error::EmptyMethodName);
         }
 
-        self.root_domain = Some(self.get_root_domain()?);
+        self.ensure_root_domain()?;
         let raw_image = self.open_image_from_data(raw_assembly)?;
 
         self.attach = true;
@@ -179,7 +179,7 @@ impl Injector {
             return Err(Error::EmptyMethodName);
         }
 
-        self.root_domain = Some(self.get_root_domain()?);
+        self.ensure_root_domain()?;
         self.attach = true;
 
         self.invoke_assembly_method(assembly, namespace, class_name, method_name)?;
@@ -202,10 +202,17 @@ impl Injector {
         self.runtime_invoke(method)
     }
 
-    fn get_root_domain(&mut self) -> Result<NonZeroUsize> {
+    fn ensure_root_domain(&mut self) -> Result<()> {
+        if self.root_domain.is_some() {
+            return Ok(());
+        }
+
         let address = self.export(Self::MONO_GET_ROOT_DOMAIN)?;
         let root_domain = self.execute(address, &[])?;
-        NonZeroUsize::new(root_domain).ok_or(Error::NullReturn(Self::MONO_GET_ROOT_DOMAIN))
+        self.root_domain = Some(
+            NonZeroUsize::new(root_domain).ok_or(Error::NullReturn(Self::MONO_GET_ROOT_DOMAIN))?,
+        );
+        Ok(())
     }
 
     fn open_image_from_data(&mut self, assembly: &[u8]) -> Result<NonZeroUsize> {
