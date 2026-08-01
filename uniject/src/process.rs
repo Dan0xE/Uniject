@@ -12,7 +12,7 @@ use windows_sys::Win32::System::ProcessStatus::{
 };
 use windows_sys::Win32::System::Threading::IsWow64Process;
 
-use crate::injector_exceptions::InjectorException;
+use crate::error::{Error, Result};
 use crate::memory::{Memory, checked_add, checked_mul};
 
 pub struct ExportedFunction {
@@ -26,14 +26,18 @@ impl ExportedFunction {
     }
 }
 
-pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
+pub fn find_process_id_by_name(process_name: &str) -> Result<u32> {
+    let requested_name = process_name.to_owned();
     let process_name = process_name.to_lowercase();
     let process_name =
         if process_name.ends_with(".exe") { process_name } else { format!("{process_name}.exe") };
 
     let raw_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if raw_snapshot == INVALID_HANDLE_VALUE {
-        return None;
+        return Err(Error::Windows {
+            operation: "failed to create process snapshot",
+            source: std::io::Error::last_os_error(),
+        });
     }
     // SAFETY: CreateToolhelp32Snapshot returned a valid, owned handle.
     let snapshot = unsafe { OwnedHandle::from_raw_handle(raw_snapshot) };
@@ -62,20 +66,19 @@ pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
         }
     }
 
-    process_id
+    process_id.ok_or(Error::ProcessNotFound { name: requested_name })
 }
 
 pub fn get_exported_functions(
     handle: BorrowedHandle<'_>,
     mod_address: NonZeroUsize,
-) -> Result<Vec<ExportedFunction>, InjectorException> {
+) -> Result<Vec<ExportedFunction>> {
     let mut exported_functions = Vec::new();
     let is_64_bit = is_64_bit_process(handle)?;
 
     let memory = Memory::new(handle);
     //nt header offset
-    let e_lfanew = usize::try_from(memory.read_int(checked_add(mod_address, 0x3C)?)?)
-        .map_err(|_| InjectorException::new("Invalid PE header offset"))?;
+    let e_lfanew = usize::try_from(memory.read_int(checked_add(mod_address, 0x3C)?)?)?;
     let nt_headers = checked_add(mod_address, e_lfanew)?;
 
     let optional_header = checked_add(nt_headers, 0x18)?;
@@ -109,9 +112,7 @@ pub fn get_exported_functions(
     Ok(exported_functions)
 }
 
-pub fn get_mono_module(
-    handle: BorrowedHandle<'_>,
-) -> Result<Option<NonZeroUsize>, InjectorException> {
+pub fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<NonZeroUsize>> {
     let mut bytes_needed: u32 = 0;
     let raw_handle = handle.as_raw_handle() as HANDLE;
 
@@ -121,7 +122,10 @@ pub fn get_mono_module(
     } == 0
         || bytes_needed == 0
     {
-        return Err(InjectorException::new("Failed to enumerate process modules"));
+        return Err(Error::Windows {
+            operation: "failed to enumerate process modules",
+            source: std::io::Error::last_os_error(),
+        });
     }
 
     //resize buffer
@@ -139,7 +143,10 @@ pub fn get_mono_module(
         )
     } == 0
     {
-        return Err(InjectorException::new("Failed to enumerate process modules"));
+        return Err(Error::Windows {
+            operation: "failed to enumerate process modules",
+            source: std::io::Error::last_os_error(),
+        });
     }
 
     for &module in ptrs.iter() {
@@ -162,11 +169,14 @@ pub fn get_mono_module(
                 GetModuleInformation(raw_handle, module, &mut info, size_of::<MODULEINFO>() as u32)
             } == 0
             {
-                return Err(InjectorException::new("Failed to get module information"));
+                return Err(Error::Windows {
+                    operation: "failed to get module information",
+                    source: std::io::Error::last_os_error(),
+                });
             }
 
-            let module_address = NonZeroUsize::new(info.lpBaseOfDll as usize)
-                .ok_or_else(|| InjectorException::new("Module has a null base address"))?;
+            let module_address =
+                NonZeroUsize::new(info.lpBaseOfDll as usize).ok_or(Error::NullModuleBase)?;
             let funcs = get_exported_functions(handle, module_address)?;
 
             if funcs.iter().any(|f| f.name == "mono_get_root_domain") {
@@ -178,14 +188,17 @@ pub fn get_mono_module(
     Ok(None)
 }
 
-pub fn is_64_bit_process(handle: BorrowedHandle<'_>) -> Result<bool, InjectorException> {
+pub fn is_64_bit_process(handle: BorrowedHandle<'_>) -> Result<bool> {
     if !cfg!(target_pointer_width = "64") {
         return Ok(false);
     }
 
     let mut is_wow64 = BOOL::default();
     if unsafe { IsWow64Process(handle.as_raw_handle() as HANDLE, &mut is_wow64) } == 0 {
-        Err(InjectorException::new("Failed to check Wow64 status"))
+        Err(Error::Windows {
+            operation: "failed to check Wow64 status",
+            source: std::io::Error::last_os_error(),
+        })
     } else {
         Ok(is_wow64 == 0 && size_of::<usize>() == 8)
     }

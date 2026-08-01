@@ -9,25 +9,20 @@ use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx, VirtualFreeEx,
 };
 
-use crate::injector_exceptions::InjectorException;
+use crate::error::{Error, Result};
 
 const U16_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<u16>()).unwrap();
 const I32_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<i32>()).unwrap();
 const I64_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<i64>()).unwrap();
 
 #[inline]
-pub(crate) fn checked_add(
-    address: NonZeroUsize,
-    offset: usize,
-) -> Result<NonZeroUsize, InjectorException> {
-    address.checked_add(offset).ok_or_else(|| InjectorException::new("Memory address overflow"))
+pub(crate) fn checked_add(address: NonZeroUsize, offset: usize) -> Result<NonZeroUsize> {
+    address.checked_add(offset).ok_or(Error::AddressOverflow)
 }
 
 #[inline]
-pub(crate) fn checked_mul(value: usize, multiplier: usize) -> Result<usize, InjectorException> {
-    value
-        .checked_mul(multiplier)
-        .ok_or_else(|| InjectorException::new("Memory arithmetic overflow"))
+pub(crate) fn checked_mul(value: usize, multiplier: usize) -> Result<usize> {
+    value.checked_mul(multiplier).ok_or(Error::ArithmeticOverflow)
 }
 
 pub struct Memory<H: AsHandle> {
@@ -44,11 +39,7 @@ impl<H: AsHandle> Memory<H> {
         self.handle.as_handle().as_raw_handle() as HANDLE
     }
 
-    pub fn read_string(
-        &self,
-        address: NonZeroUsize,
-        length: usize,
-    ) -> Result<String, InjectorException> {
+    pub fn read_string(&self, address: NonZeroUsize, length: usize) -> Result<String> {
         let mut bytes = Vec::new();
         for _ in 0..length {
             let address = checked_add(address, bytes.len())?;
@@ -59,53 +50,42 @@ impl<H: AsHandle> Memory<H> {
             bytes.push(read);
         }
 
-        String::from_utf8(bytes)
-            .map_err(|e| InjectorException::with_inner("Failed to read string", Box::new(e)))
+        Ok(String::from_utf8(bytes)?)
     }
 
-    pub fn read_unicode_string(
-        &self,
-        address: NonZeroUsize,
-        length: usize,
-    ) -> Result<String, InjectorException> {
+    pub fn read_unicode_string(&self, address: NonZeroUsize, length: usize) -> Result<String> {
         let Some(length) = NonZeroUsize::new(length) else {
             return Ok(String::new());
         };
         let bytes = self.read_bytes(address, length)?;
         let utf16_units: Vec<u16> =
             bytes.chunks_exact(2).map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]])).collect();
-        String::from_utf16(&utf16_units).map_err(|e| {
-            InjectorException::with_inner("Failed to read Unicode string", Box::new(e))
-        })
+        Ok(String::from_utf16(&utf16_units)?)
     }
 
-    pub fn read_ushort(&self, address: NonZeroUsize) -> Result<u16, InjectorException> {
+    pub fn read_ushort(&self, address: NonZeroUsize) -> Result<u16> {
         let bytes = self.read_bytes(address, U16_SIZE)?;
         Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
-    pub fn read_int(&self, address: NonZeroUsize) -> Result<i32, InjectorException> {
+    pub fn read_int(&self, address: NonZeroUsize) -> Result<i32> {
         let bytes = self.read_bytes(address, I32_SIZE)?;
         Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    pub fn read_uint(&self, address: NonZeroUsize) -> Result<u32, InjectorException> {
+    pub fn read_uint(&self, address: NonZeroUsize) -> Result<u32> {
         let bytes = self.read_bytes(address, I32_SIZE)?;
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    pub fn read_long(&self, address: NonZeroUsize) -> Result<i64, InjectorException> {
+    pub fn read_long(&self, address: NonZeroUsize) -> Result<i64> {
         let bytes = self.read_bytes(address, I64_SIZE)?;
         Ok(i64::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]))
     }
 
-    fn read_bytes(
-        &self,
-        address: NonZeroUsize,
-        size: NonZeroUsize,
-    ) -> Result<Vec<u8>, InjectorException> {
+    fn read_bytes(&self, address: NonZeroUsize, size: NonZeroUsize) -> Result<Vec<u8>> {
         let mut buffer = vec![0u8; size.get()];
         if unsafe {
             ReadProcessMemory(
@@ -119,33 +99,29 @@ impl<H: AsHandle> Memory<H> {
         {
             Ok(buffer)
         } else {
-            Err(InjectorException::with_inner(
-                "Failed to read process memory",
-                Box::new(std::io::Error::last_os_error()),
-            ))
+            Err(Error::Windows {
+                operation: "failed to read process memory",
+                source: std::io::Error::last_os_error(),
+            })
         }
     }
 
-    pub fn allocate_and_write(&mut self, data: &[u8]) -> Result<NonZeroUsize, InjectorException> {
-        let size = NonZeroUsize::new(data.len())
-            .ok_or_else(|| InjectorException::new("Cannot allocate an empty buffer"))?;
+    pub fn allocate_and_write(&mut self, data: &[u8]) -> Result<NonZeroUsize> {
+        let size = NonZeroUsize::new(data.len()).ok_or(Error::EmptyBuffer)?;
         let addr = self.allocate(size)?;
         self.write(addr, data)?;
         Ok(addr)
     }
 
-    pub fn allocate_and_write_int(&mut self, data: i32) -> Result<NonZeroUsize, InjectorException> {
+    pub fn allocate_and_write_int(&mut self, data: i32) -> Result<NonZeroUsize> {
         self.allocate_and_write(&data.to_le_bytes())
     }
 
-    pub fn allocate_and_write_long(
-        &mut self,
-        data: i64,
-    ) -> Result<NonZeroUsize, InjectorException> {
+    pub fn allocate_and_write_long(&mut self, data: i64) -> Result<NonZeroUsize> {
         self.allocate_and_write(&data.to_le_bytes())
     }
 
-    pub fn allocate(&mut self, size: NonZeroUsize) -> Result<NonZeroUsize, InjectorException> {
+    pub fn allocate(&mut self, size: NonZeroUsize) -> Result<NonZeroUsize> {
         let addr = unsafe {
             VirtualAllocEx(
                 self.raw_handle(),
@@ -156,13 +132,15 @@ impl<H: AsHandle> Memory<H> {
             )
         } as usize;
 
-        let addr = NonZeroUsize::new(addr)
-            .ok_or_else(|| InjectorException::new("Failed to allocate process memory"))?;
+        let addr = NonZeroUsize::new(addr).ok_or_else(|| Error::Windows {
+            operation: "failed to allocate process memory",
+            source: std::io::Error::last_os_error(),
+        })?;
         self.allocations.insert(addr, size);
         Ok(addr)
     }
 
-    pub fn write(&self, address: NonZeroUsize, data: &[u8]) -> Result<(), InjectorException> {
+    pub fn write(&self, address: NonZeroUsize, data: &[u8]) -> Result<()> {
         let Some(size) = NonZeroUsize::new(data.len()) else {
             return Ok(());
         };
@@ -178,7 +156,10 @@ impl<H: AsHandle> Memory<H> {
         {
             Ok(())
         } else {
-            Err(InjectorException::new("Failed to write process memory"))
+            Err(Error::Windows {
+                operation: "failed to write process memory",
+                source: std::io::Error::last_os_error(),
+            })
         }
     }
 }

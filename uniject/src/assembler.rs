@@ -2,9 +2,7 @@ use std::num::NonZeroUsize;
 
 use iced_x86::code_asm::*;
 
-use crate::injector_exceptions::InjectorException;
-
-pub type AssemblerResult<T> = Result<T, InjectorException>;
+pub type AssemblerResult<T> = crate::error::Result<T>;
 
 pub struct Assembler {
     asm: CodeAssembler,
