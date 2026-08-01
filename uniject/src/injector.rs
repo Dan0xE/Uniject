@@ -39,9 +39,12 @@ pub struct Injector {
     attach: bool,
     mono_module: NonZeroUsize,
     is_64_bit: bool,
+    return_value_ptr: NonZeroUsize,
+    code_buffer: Option<(NonZeroUsize, NonZeroUsize)>,
 }
 
 impl Injector {
+    const MIN_CODE_BUFFER_CAPACITY: usize = 256;
     const MONO_GET_ROOT_DOMAIN: &'static str = "mono_get_root_domain";
     const MONO_THREAD_ATTACH: &'static str = "mono_thread_attach";
     const MONO_IMAGE_OPEN_FROM_DATA: &'static str = "mono_image_open_from_data";
@@ -107,7 +110,12 @@ impl Injector {
             }
         }
 
-        let memory = Memory::new(handle);
+        let mut memory = Memory::new(handle);
+        let return_value_ptr = if is_64_bit {
+            memory.allocate_and_write(&0u64.to_le_bytes())?
+        } else {
+            memory.allocate_and_write(&0u32.to_le_bytes())?
+        };
 
         Ok(Injector {
             memory,
@@ -116,6 +124,8 @@ impl Injector {
             attach: false,
             mono_module: mono_module.address,
             is_64_bit,
+            return_value_ptr,
+            code_buffer: None,
         })
     }
 
@@ -329,7 +339,11 @@ impl Injector {
     }
 
     fn runtime_invoke(&mut self, method: NonZeroUsize) -> Result<()> {
-        let exc_ptr = self.allocate_pointer()?;
+        let exc_ptr = if self.is_64_bit {
+            self.memory.allocate_and_write(&0u64.to_le_bytes())?
+        } else {
+            self.memory.allocate_and_write(&0u32.to_le_bytes())?
+        };
 
         //res
         let address = self.export(Self::MONO_RUNTIME_INVOKE)?;
@@ -346,23 +360,30 @@ impl Injector {
         Ok(())
     }
 
-    fn allocate_pointer(&mut self) -> Result<NonZeroUsize> {
-        if self.is_64_bit {
-            self.memory.allocate_and_write(&0i64.to_le_bytes())
-        } else {
-            self.memory.allocate_and_write(&0i32.to_le_bytes())
-        }
-    }
-
     fn execute(&mut self, address: NonZeroUsize, args: &[usize]) -> Result<usize> {
-        let ret_val_ptr = self.allocate_pointer()?;
+        if self.is_64_bit {
+            self.memory.write(self.return_value_ptr, &0u64.to_le_bytes())?;
+        } else {
+            self.memory.write(self.return_value_ptr, &0u32.to_le_bytes())?;
+        }
 
         let code = if self.is_64_bit {
-            self.assemble_64(address, ret_val_ptr, args)?
+            self.assemble_64(address, self.return_value_ptr, args)?
         } else {
-            self.assemble_86(address, ret_val_ptr, args)?
+            self.assemble_86(address, self.return_value_ptr, args)?
         };
-        let alloc = self.memory.allocate_and_write(&code)?;
+        let code_buffer = match self.code_buffer {
+            Some((address, capacity)) if code.len() <= capacity.get() => address,
+            _ => {
+                let capacity = code.len().max(Self::MIN_CODE_BUFFER_CAPACITY);
+                let size = NonZeroUsize::new(capacity)
+                    .expect("minimum code buffer capacity must be non-zero");
+                let address = self.memory.allocate(size)?;
+                self.code_buffer = Some((address, size));
+                address
+            }
+        };
+        self.memory.write_code(code_buffer, &code)?;
 
         let mut thread_id: u32 = 0;
         let thread = unsafe {
@@ -373,7 +394,7 @@ impl Injector {
                 Some(std::mem::transmute::<
                     usize,
                     unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
-                >(alloc.get())),
+                >(code_buffer.get())),
                 std::ptr::null(),
                 0,
                 &mut thread_id,
@@ -399,7 +420,7 @@ impl Injector {
             });
         }
 
-        let ret = self.memory.read_pointer(ret_val_ptr, self.is_64_bit)?;
+        let ret = self.memory.read_pointer(self.return_value_ptr, self.is_64_bit)?;
 
         if ret == 0xC0000005 {
             let function_name = self
