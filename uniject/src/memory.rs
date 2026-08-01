@@ -121,14 +121,6 @@ impl<H: AsHandle> Memory<H> {
         Ok(addr)
     }
 
-    pub(crate) fn allocate_and_write_int(&mut self, data: i32) -> Result<NonZeroUsize> {
-        self.allocate_and_write(&data.to_le_bytes())
-    }
-
-    pub(crate) fn allocate_and_write_long(&mut self, data: i64) -> Result<NonZeroUsize> {
-        self.allocate_and_write(&data.to_le_bytes())
-    }
-
     fn allocate(&mut self, size: NonZeroUsize) -> Result<NonZeroUsize> {
         let addr = unsafe {
             VirtualAllocEx(

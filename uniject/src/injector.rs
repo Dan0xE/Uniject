@@ -193,7 +193,7 @@ impl Injector {
 
     fn open_image_from_data(&mut self, assembly: &[u8]) -> Result<NonZeroUsize> {
         //allocate space for pointer
-        let status_ptr = self.memory.allocate_and_write_int(0)?;
+        let status_ptr = self.memory.allocate_and_write(&0i32.to_le_bytes())?;
 
         let assembly_data_ptr = self.memory.allocate_and_write(assembly)?;
 
@@ -212,7 +212,7 @@ impl Injector {
     }
 
     fn open_assembly_from_image(&mut self, image: NonZeroUsize) -> Result<NonZeroUsize> {
-        let status_ptr = self.memory.allocate_and_write_int(0)?;
+        let status_ptr = self.memory.allocate_and_write(&0i32.to_le_bytes())?;
         let empty_array_ptr = self.memory.allocate_and_write(&[0u8])?;
 
         let address = self.export(Self::MONO_ASSEMBLY_LOAD_FROM_FULL)?;
@@ -325,9 +325,9 @@ impl Injector {
 
     fn allocate_pointer(&mut self) -> Result<NonZeroUsize> {
         if self.is_64_bit {
-            self.memory.allocate_and_write_long(0)
+            self.memory.allocate_and_write(&0i64.to_le_bytes())
         } else {
-            self.memory.allocate_and_write_int(0)
+            self.memory.allocate_and_write(&0i32.to_le_bytes())
         }
     }
 
