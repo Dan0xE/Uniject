@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 
-use windows_sys::Win32::Foundation::{BOOL, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
+use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
 use windows_sys::Win32::System::Threading::{
     CreateRemoteThread, IsWow64Process, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject,
 };
+use windows_sys::core::BOOL;
 
 use crate::assembler::Assembler;
 use crate::error::{Error, Result};
