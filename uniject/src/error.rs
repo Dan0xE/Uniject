@@ -1,5 +1,5 @@
 use std::io;
-use std::num::TryFromIntError;
+use std::num::{NonZeroUsize, TryFromIntError};
 use std::string::{FromUtf8Error, FromUtf16Error};
 
 #[derive(Debug, thiserror::Error)]
@@ -29,8 +29,8 @@ pub enum Error {
     #[error("Mono module not found")]
     MonoModuleNotFound,
 
-    #[error("failed to obtain the address of {0}()")]
-    MissingExport(&'static str),
+    #[error("failed to obtain the address of {name}() from Mono module at {module:#X}")]
+    MissingExport { name: &'static str, module: NonZeroUsize },
 
     #[error("{0}() returned NULL")]
     NullReturn(&'static str),

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
-use std::sync::LazyLock;
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
 use windows_sys::Win32::System::Threading::{
@@ -11,26 +10,9 @@ use windows_sys::Win32::System::Threading::{
 use crate::assembler::Assembler;
 use crate::error::{Error, Result};
 use crate::memory::{Memory, checked_add, checked_mul};
-use crate::process::{get_exported_functions, get_mono_module, is_64_bit_process};
+use crate::process::{get_mono_module, is_64_bit_process};
 
-static EXPORTS: LazyLock<HashMap<&'static str, Option<NonZeroUsize>>> = LazyLock::new(|| {
-    HashMap::from([
-        ("mono_get_root_domain", None),
-        ("mono_thread_attach", None),
-        ("mono_image_open_from_data", None),
-        ("mono_assembly_load_from_full", None),
-        ("mono_assembly_get_image", None),
-        ("mono_class_from_name", None),
-        ("mono_class_get_method_from_name", None),
-        ("mono_runtime_invoke", None),
-        ("mono_assembly_close", None),
-        ("mono_image_strerror", None),
-        ("mono_object_get_class", None),
-        ("mono_class_get_name", None),
-    ])
-});
-
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MonoImageOpenStatus {
     Ok,
     ErrorErrno,
@@ -51,7 +33,7 @@ impl From<i32> for MonoImageOpenStatus {
 
 pub struct Injector {
     memory: Memory<OwnedHandle>,
-    exports: HashMap<&'static str, Option<NonZeroUsize>>,
+    exports: HashMap<&'static str, NonZeroUsize>,
     root_domain: Option<NonZeroUsize>,
     attach: bool,
     mono_module: NonZeroUsize,
@@ -84,18 +66,43 @@ impl Injector {
         // SAFETY: OpenProcess returned a valid, owned handle.
         let handle = unsafe { OwnedHandle::from_raw_handle(raw_handle) };
 
-        let mono_module = get_mono_module(handle.as_handle())?.ok_or(Error::MonoModuleNotFound)?;
-
         let is_64_bit = is_64_bit_process(handle.as_handle())?;
+        let mono_module =
+            get_mono_module(handle.as_handle(), is_64_bit)?.ok_or(Error::MonoModuleNotFound)?;
+
+        let exports = [
+            Self::MONO_GET_ROOT_DOMAIN,
+            Self::MONO_THREAD_ATTACH,
+            Self::MONO_IMAGE_OPEN_FROM_DATA,
+            Self::MONO_ASSEMBLY_LOAD_FROM_FULL,
+            Self::MONO_ASSEMBLY_GET_IMAGE,
+            Self::MONO_CLASS_FROM_NAME,
+            Self::MONO_CLASS_GET_METHOD_FROM_NAME,
+            Self::MONO_RUNTIME_INVOKE,
+            Self::MONO_ASSEMBLY_CLOSE,
+            Self::MONO_IMAGE_STRERROR,
+            Self::MONO_OBJECT_GET_CLASS,
+            Self::MONO_CLASS_GET_NAME,
+        ]
+        .into_iter()
+        .map(|name| {
+            mono_module
+                .exports
+                .iter()
+                .find(|export| export.name == name)
+                .map(|export| (name, export.address))
+                .ok_or(Error::MissingExport { name, module: mono_module.address })
+        })
+        .collect::<Result<HashMap<_, _>>>()?;
 
         let memory = Memory::new(handle);
 
         Ok(Injector {
             memory,
-            exports: EXPORTS.clone(),
+            exports,
             root_domain: None,
             attach: false,
-            mono_module,
+            mono_module: mono_module.address,
             is_64_bit,
         })
     }
@@ -104,27 +111,12 @@ impl Injector {
         self.is_64_bit
     }
 
-    fn obtain_mono_exports(&mut self) -> Result<()> {
-        let exported_functions = get_exported_functions(self.memory.as_handle(), self.mono_module)?;
-
-        for ef in exported_functions {
-            if let Some(export) = self.exports.get_mut(&*ef.name) {
-                *export = Some(ef.address);
-            }
-        }
-
-        for (name, &address) in &self.exports {
-            if address.is_none() {
-                return Err(Error::MissingExport(name));
-            }
-        }
-
-        Ok(())
-    }
-
     #[inline]
     fn export(&self, name: &'static str) -> Result<NonZeroUsize> {
-        self.exports.get(name).copied().flatten().ok_or(Error::MissingExport(name))
+        self.exports
+            .get(name)
+            .copied()
+            .ok_or(Error::MissingExport { name, module: self.mono_module })
     }
 
     pub fn inject(
@@ -146,18 +138,12 @@ impl Injector {
             return Err(Error::EmptyMethodName);
         }
 
-        self.obtain_mono_exports()?;
-
         self.root_domain = Some(self.get_root_domain()?);
         let raw_image = self.open_image_from_data(raw_assembly)?;
 
         self.attach = true;
         let assembly = self.open_assembly_from_image(raw_image)?;
-        let image = self.get_image_from_assembly(assembly)?;
-        let class = self.get_class_from_name(image, namespace, class_name)?;
-        let method = self.get_method_from_name(class, method_name)?;
-
-        self.runtime_invoke(method)?;
+        self.invoke_assembly_method(assembly, namespace, class_name, method_name)?;
 
         Ok(assembly)
     }
@@ -177,18 +163,26 @@ impl Injector {
             return Err(Error::EmptyMethodName);
         }
 
-        self.obtain_mono_exports()?;
         self.root_domain = Some(self.get_root_domain()?);
         self.attach = true;
 
-        let image = self.get_image_from_assembly(assembly)?;
-        let class = self.get_class_from_name(image, namespace, class_name)?;
-        let method = self.get_method_from_name(class, method_name)?;
-
-        self.runtime_invoke(method)?;
+        self.invoke_assembly_method(assembly, namespace, class_name, method_name)?;
         self.close_assembly(assembly)?;
 
         Ok(())
+    }
+
+    fn invoke_assembly_method(
+        &mut self,
+        assembly: NonZeroUsize,
+        namespace: &str,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<()> {
+        let image = self.get_image_from_assembly(assembly)?;
+        let class = self.get_class_from_name(image, namespace, class_name)?;
+        let method = self.get_method_from_name(class, method_name)?;
+        self.runtime_invoke(method)
     }
 
     fn get_root_domain(&mut self) -> Result<NonZeroUsize> {
@@ -212,23 +206,7 @@ impl Injector {
             &[assembly_data_ptr.get(), assembly.len(), 1, status_ptr.get()],
         )?;
 
-        //read status
-        let status = MonoImageOpenStatus::from(self.memory.read_int(status_ptr)?);
-
-        if status != MonoImageOpenStatus::Ok {
-            //get error msg ptr
-            let mono_image_strerror_address = self.export(Self::MONO_IMAGE_STRERROR)?;
-            let message_ptr = self.execute(mono_image_strerror_address, &[status as usize])?;
-
-            //read msg
-            let message_ptr = NonZeroUsize::new(message_ptr)
-                .ok_or(Error::NullReturn(Self::MONO_IMAGE_STRERROR))?;
-            let message = self.memory.read_string(message_ptr, 256)?;
-            return Err(Error::MonoOperation {
-                operation: Self::MONO_IMAGE_OPEN_FROM_DATA,
-                message,
-            });
-        }
+        self.check_image_status(status_ptr, Self::MONO_IMAGE_OPEN_FROM_DATA)?;
 
         NonZeroUsize::new(raw_image).ok_or(Error::NullReturn(Self::MONO_IMAGE_OPEN_FROM_DATA))
     }
@@ -241,22 +219,28 @@ impl Injector {
         let assembly =
             self.execute(address, &[image.get(), empty_array_ptr.get(), status_ptr.get(), 0])?;
 
-        let status = MonoImageOpenStatus::from(self.memory.read_int(status_ptr)?);
-
-        if status != MonoImageOpenStatus::Ok {
-            let address = self.export(Self::MONO_IMAGE_STRERROR)?;
-            let message_ptr = self.execute(address, &[status as usize])?;
-
-            let message_ptr = NonZeroUsize::new(message_ptr)
-                .ok_or(Error::NullReturn(Self::MONO_IMAGE_STRERROR))?;
-            let message = self.memory.read_string(message_ptr, 256)?;
-            return Err(Error::MonoOperation {
-                operation: Self::MONO_ASSEMBLY_LOAD_FROM_FULL,
-                message,
-            });
-        }
+        self.check_image_status(status_ptr, Self::MONO_ASSEMBLY_LOAD_FROM_FULL)?;
 
         NonZeroUsize::new(assembly).ok_or(Error::NullReturn(Self::MONO_ASSEMBLY_LOAD_FROM_FULL))
+    }
+
+    fn check_image_status(
+        &mut self,
+        status_ptr: NonZeroUsize,
+        operation: &'static str,
+    ) -> Result<()> {
+        let status = MonoImageOpenStatus::from(self.memory.read_int(status_ptr)?);
+        if status == MonoImageOpenStatus::Ok {
+            return Ok(());
+        }
+
+        let address = self.export(Self::MONO_IMAGE_STRERROR)?;
+        let message_ptr = self.execute(address, &[status as usize])?;
+        let message_ptr =
+            NonZeroUsize::new(message_ptr).ok_or(Error::NullReturn(Self::MONO_IMAGE_STRERROR))?;
+        let message = self.memory.read_string(message_ptr, 256)?;
+
+        Err(Error::MonoOperation { operation, message })
     }
 
     fn get_image_from_assembly(&mut self, assembly: NonZeroUsize) -> Result<NonZeroUsize> {
@@ -322,11 +306,7 @@ impl Injector {
     }
 
     fn runtime_invoke(&mut self, method: NonZeroUsize) -> Result<()> {
-        let exc_ptr = if self.is_64_bit {
-            self.memory.allocate_and_write_long(0)?
-        } else {
-            self.memory.allocate_and_write_int(0)?
-        };
+        let exc_ptr = self.allocate_pointer()?;
 
         //res
         let address = self.export(Self::MONO_RUNTIME_INVOKE)?;
@@ -343,6 +323,14 @@ impl Injector {
         Ok(())
     }
 
+    fn allocate_pointer(&mut self) -> Result<NonZeroUsize> {
+        if self.is_64_bit {
+            self.memory.allocate_and_write_long(0)
+        } else {
+            self.memory.allocate_and_write_int(0)
+        }
+    }
+
     fn close_assembly(&mut self, assembly: NonZeroUsize) -> Result<()> {
         let address = self.export(Self::MONO_ASSEMBLY_CLOSE)?;
 
@@ -353,11 +341,7 @@ impl Injector {
     }
 
     fn execute(&mut self, address: NonZeroUsize, args: &[usize]) -> Result<usize> {
-        let ret_val_ptr = if self.is_64_bit {
-            self.memory.allocate_and_write_long(0)?
-        } else {
-            self.memory.allocate_and_write_int(0)?
-        };
+        let ret_val_ptr = self.allocate_pointer()?;
 
         let code = self.assemble(address, ret_val_ptr, args)?;
         let alloc = self.memory.allocate_and_write(&code)?;
@@ -407,7 +391,7 @@ impl Injector {
             let function_name = self
                 .exports
                 .iter()
-                .find(|(_, export)| **export == Some(address))
+                .find(|(_, export)| **export == address)
                 .map(|(name, _)| *name)
                 .unwrap_or("unknown function");
 
@@ -438,11 +422,9 @@ impl Injector {
     ) -> Result<Vec<u8>> {
         let mut asm = Assembler::new()?;
 
-        if let (true, Some(mono_thread_attach), Some(root_domain)) = (
-            self.attach,
-            self.exports.get(Self::MONO_THREAD_ATTACH).copied().flatten(),
-            self.root_domain,
-        ) {
+        if let (true, Some(mono_thread_attach), Some(root_domain)) =
+            (self.attach, self.exports.get(Self::MONO_THREAD_ATTACH).copied(), self.root_domain)
+        {
             asm.push(root_domain.get() as isize)?;
             asm.mov_eax(mono_thread_attach.get() as isize)?;
             asm.call_eax()?;
@@ -472,11 +454,9 @@ impl Injector {
 
         asm.sub_rsp(40)?;
 
-        if let (true, Some(mono_thread_attach), Some(root_domain)) = (
-            self.attach,
-            self.exports.get(Self::MONO_THREAD_ATTACH).copied().flatten(),
-            self.root_domain,
-        ) {
+        if let (true, Some(mono_thread_attach), Some(root_domain)) =
+            (self.attach, self.exports.get(Self::MONO_THREAD_ATTACH).copied(), self.root_domain)
+        {
             asm.mov_rax(mono_thread_attach.get())?;
             asm.mov_rcx(root_domain.get())?;
             asm.call_rax()?;

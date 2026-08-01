@@ -20,6 +20,11 @@ pub(crate) struct ExportedFunction {
     pub(crate) address: NonZeroUsize,
 }
 
+pub(crate) struct MonoModule {
+    pub(crate) address: NonZeroUsize,
+    pub(crate) exports: Vec<ExportedFunction>,
+}
+
 pub fn find_process_id_by_name(process_name: &str) -> Result<u32> {
     let requested_name = process_name.to_owned();
     let process_name = process_name.to_lowercase();
@@ -63,12 +68,12 @@ pub fn find_process_id_by_name(process_name: &str) -> Result<u32> {
     process_id.ok_or(Error::ProcessNotFound { name: requested_name })
 }
 
-pub(crate) fn get_exported_functions(
+fn get_exported_functions(
     handle: BorrowedHandle<'_>,
     mod_address: NonZeroUsize,
+    is_64_bit: bool,
 ) -> Result<Vec<ExportedFunction>> {
     let mut exported_functions = Vec::new();
-    let is_64_bit = is_64_bit_process(handle)?;
 
     let memory = Memory::new(handle);
     //nt header offset
@@ -106,7 +111,10 @@ pub(crate) fn get_exported_functions(
     Ok(exported_functions)
 }
 
-pub(crate) fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<NonZeroUsize>> {
+pub(crate) fn get_mono_module(
+    handle: BorrowedHandle<'_>,
+    is_64_bit: bool,
+) -> Result<Option<MonoModule>> {
     let mut bytes_needed: u32 = 0;
     let raw_handle = handle.as_raw_handle() as HANDLE;
 
@@ -171,10 +179,10 @@ pub(crate) fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<NonZe
 
             let module_address =
                 NonZeroUsize::new(info.lpBaseOfDll as usize).ok_or(Error::NullModuleBase)?;
-            let funcs = get_exported_functions(handle, module_address)?;
+            let exports = get_exported_functions(handle, module_address, is_64_bit)?;
 
-            if funcs.iter().any(|f| f.name == "mono_get_root_domain") {
-                return Ok(Some(module_address));
+            if exports.iter().any(|export| export.name == "mono_get_root_domain") {
+                return Ok(Some(MonoModule { address: module_address, exports }));
             }
         }
     }
