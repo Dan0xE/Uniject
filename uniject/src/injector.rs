@@ -13,6 +13,16 @@ use crate::error::{Error, Result};
 use crate::memory::{Memory, checked_add, checked_mul};
 use crate::process::get_mono_module;
 
+macro_rules! mono_exports {
+    ($($constant:ident = $symbol:literal),+ $(,)?) => {
+        $(const $constant: &'static str = $symbol;)+
+
+        const REQUIRED_MONO_EXPORTS: &'static [&'static str] = &[
+            $(Self::$constant),+
+        ];
+    };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MonoImageOpenStatus {
     Ok,
@@ -45,32 +55,20 @@ pub struct Injector {
 
 impl Injector {
     const MIN_CODE_BUFFER_CAPACITY: usize = 256;
-    const MONO_GET_ROOT_DOMAIN: &'static str = "mono_get_root_domain";
-    const MONO_THREAD_ATTACH: &'static str = "mono_thread_attach";
-    const MONO_IMAGE_OPEN_FROM_DATA: &'static str = "mono_image_open_from_data";
-    const MONO_ASSEMBLY_LOAD_FROM_FULL: &'static str = "mono_assembly_load_from_full";
-    const MONO_ASSEMBLY_GET_IMAGE: &'static str = "mono_assembly_get_image";
-    const MONO_CLASS_FROM_NAME: &'static str = "mono_class_from_name";
-    const MONO_CLASS_GET_METHOD_FROM_NAME: &'static str = "mono_class_get_method_from_name";
-    const MONO_RUNTIME_INVOKE: &'static str = "mono_runtime_invoke";
-    const MONO_ASSEMBLY_CLOSE: &'static str = "mono_assembly_close";
-    const MONO_IMAGE_STRERROR: &'static str = "mono_image_strerror";
-    const MONO_OBJECT_GET_CLASS: &'static str = "mono_object_get_class";
-    const MONO_CLASS_GET_NAME: &'static str = "mono_class_get_name";
-    const REQUIRED_MONO_EXPORTS: [&'static str; 12] = [
-        Self::MONO_GET_ROOT_DOMAIN,
-        Self::MONO_THREAD_ATTACH,
-        Self::MONO_IMAGE_OPEN_FROM_DATA,
-        Self::MONO_ASSEMBLY_LOAD_FROM_FULL,
-        Self::MONO_ASSEMBLY_GET_IMAGE,
-        Self::MONO_CLASS_FROM_NAME,
-        Self::MONO_CLASS_GET_METHOD_FROM_NAME,
-        Self::MONO_RUNTIME_INVOKE,
-        Self::MONO_ASSEMBLY_CLOSE,
-        Self::MONO_IMAGE_STRERROR,
-        Self::MONO_OBJECT_GET_CLASS,
-        Self::MONO_CLASS_GET_NAME,
-    ];
+    mono_exports! {
+        MONO_GET_ROOT_DOMAIN = "mono_get_root_domain",
+        MONO_THREAD_ATTACH = "mono_thread_attach",
+        MONO_IMAGE_OPEN_FROM_DATA = "mono_image_open_from_data",
+        MONO_ASSEMBLY_LOAD_FROM_FULL = "mono_assembly_load_from_full",
+        MONO_ASSEMBLY_GET_IMAGE = "mono_assembly_get_image",
+        MONO_CLASS_FROM_NAME = "mono_class_from_name",
+        MONO_CLASS_GET_METHOD_FROM_NAME = "mono_class_get_method_from_name",
+        MONO_RUNTIME_INVOKE = "mono_runtime_invoke",
+        MONO_ASSEMBLY_CLOSE = "mono_assembly_close",
+        MONO_IMAGE_STRERROR = "mono_image_strerror",
+        MONO_OBJECT_GET_CLASS = "mono_object_get_class",
+        MONO_CLASS_GET_NAME = "mono_class_get_name",
+    }
 
     pub fn new(process_id: u32) -> Result<Self> {
         let raw_handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
@@ -101,10 +99,10 @@ impl Injector {
         };
 
         let mono_module =
-            get_mono_module(handle.as_handle(), is_64_bit, &Self::REQUIRED_MONO_EXPORTS)?
+            get_mono_module(handle.as_handle(), is_64_bit, Self::REQUIRED_MONO_EXPORTS)?
                 .ok_or(Error::MonoModuleNotFound)?;
 
-        for name in Self::REQUIRED_MONO_EXPORTS {
+        for &name in Self::REQUIRED_MONO_EXPORTS {
             if !mono_module.exports.contains_key(name) {
                 return Err(Error::MissingExport { name, module: mono_module.address });
             }
