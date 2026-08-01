@@ -6,14 +6,14 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows_sys::Win32::System::Memory::{
-    MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx, VirtualFreeEx,
+    MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx, VirtualFreeEx,
 };
 
 use crate::error::{Error, Result};
 
 const U16_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<u16>()).unwrap();
 const I32_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<i32>()).unwrap();
-const I64_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<i64>()).unwrap();
+const U64_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<u64>()).unwrap();
 
 #[inline]
 pub(crate) fn checked_add(address: NonZeroUsize, offset: usize) -> Result<NonZeroUsize> {
@@ -82,11 +82,15 @@ impl<H: AsHandle> Memory<H> {
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    pub(crate) fn read_long(&self, address: NonZeroUsize) -> Result<i64> {
-        let bytes = self.read_bytes(address, I64_SIZE)?;
-        Ok(i64::from_le_bytes([
+    pub(crate) fn read_pointer(&self, address: NonZeroUsize, is_64_bit: bool) -> Result<usize> {
+        if !is_64_bit {
+            return Ok(self.read_uint(address)? as usize);
+        }
+
+        let bytes = self.read_bytes(address, U64_SIZE)?;
+        Ok(usize::try_from(u64::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ]))
+        ]))?)
     }
 
     fn read_bytes(&self, address: NonZeroUsize, size: NonZeroUsize) -> Result<Vec<u8>> {
@@ -176,13 +180,13 @@ impl<H: AsHandle> AsHandle for Memory<H> {
 
 impl<H: AsHandle> Drop for Memory<H> {
     fn drop(&mut self) {
-        for (&address, &size) in &self.allocations {
+        for &address in self.allocations.keys() {
             unsafe {
                 if VirtualFreeEx(
                     self.raw_handle(),
                     address.get() as *mut std::ffi::c_void,
-                    size.get(),
-                    MEM_DECOMMIT,
+                    0,
+                    MEM_RELEASE,
                 ) == 0
                 {
                     eprintln!(

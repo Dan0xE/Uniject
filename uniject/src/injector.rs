@@ -312,7 +312,7 @@ impl Injector {
         let address = self.export(Self::MONO_RUNTIME_INVOKE)?;
         self.execute(address, &[method.get(), 0, 0, exc_ptr.get()])?;
 
-        let exc = self.memory.read_int(exc_ptr)? as usize;
+        let exc = self.memory.read_pointer(exc_ptr, self.is_64_bit)?;
         if let Some(exc) = NonZeroUsize::new(exc) {
             let class_name = self.get_class_name(exc)?;
             let message_address = checked_add(exc, if self.is_64_bit { 0x20 } else { 0x10 })?;
@@ -333,10 +333,7 @@ impl Injector {
 
     fn close_assembly(&mut self, assembly: NonZeroUsize) -> Result<()> {
         let address = self.export(Self::MONO_ASSEMBLY_CLOSE)?;
-
-        let result = self.execute(address, &[assembly.get()])?;
-        NonZeroUsize::new(result).ok_or(Error::NullReturn(Self::MONO_ASSEMBLY_CLOSE))?;
-
+        self.execute(address, &[assembly.get()])?;
         Ok(())
     }
 
@@ -381,11 +378,7 @@ impl Injector {
             });
         }
 
-        let ret = if self.is_64_bit {
-            self.memory.read_long(ret_val_ptr)? as usize
-        } else {
-            self.memory.read_int(ret_val_ptr)? as usize
-        };
+        let ret = self.memory.read_pointer(ret_val_ptr, self.is_64_bit)?;
 
         if ret == 0xC0000005 {
             let function_name = self
