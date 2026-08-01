@@ -309,16 +309,19 @@ impl Injector {
     fn read_mono_string(&self, mono_string: NonZeroUsize) -> Result<String> {
         let offset = if self.is_64_bit { 0x10 } else { 0x8 };
         let len_address = checked_add(mono_string, offset)?;
-        let len = usize::try_from(self.memory.read_int(len_address)?)?;
-
-        if len == 0 {
+        let Some(len) = NonZeroUsize::new(usize::try_from(self.memory.read_int(len_address)?)?)
+        else {
             return Ok(String::new());
-        }
+        };
 
         let offset_str = if self.is_64_bit { 0x14 } else { 0xC };
         let string_address = checked_add(mono_string, offset_str)?;
-        let byte_len = checked_mul(len, 2)?;
-        self.memory.read_unicode_string(string_address, byte_len)
+        let byte_len =
+            NonZeroUsize::new(checked_mul(len.get(), 2)?).ok_or(Error::ArithmeticOverflow)?;
+        let bytes = self.memory.read_bytes(string_address, byte_len)?;
+        let utf16_units: Vec<u16> =
+            bytes.chunks_exact(2).map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]])).collect();
+        Ok(String::from_utf16(&utf16_units)?)
     }
 
     fn runtime_invoke(&mut self, method: NonZeroUsize) -> Result<()> {

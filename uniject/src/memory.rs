@@ -53,20 +53,6 @@ impl<H: AsHandle> Memory<H> {
         Ok(String::from_utf8(bytes)?)
     }
 
-    pub(crate) fn read_unicode_string(
-        &self,
-        address: NonZeroUsize,
-        length: usize,
-    ) -> Result<String> {
-        let Some(length) = NonZeroUsize::new(length) else {
-            return Ok(String::new());
-        };
-        let bytes = self.read_bytes(address, length)?;
-        let utf16_units: Vec<u16> =
-            bytes.chunks_exact(2).map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]])).collect();
-        Ok(String::from_utf16(&utf16_units)?)
-    }
-
     pub(crate) fn read_ushort(&self, address: NonZeroUsize) -> Result<u16> {
         let bytes = self.read_bytes(address, U16_SIZE)?;
         Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
@@ -93,7 +79,7 @@ impl<H: AsHandle> Memory<H> {
         ]))?)
     }
 
-    fn read_bytes(&self, address: NonZeroUsize, size: NonZeroUsize) -> Result<Vec<u8>> {
+    pub(crate) fn read_bytes(&self, address: NonZeroUsize, size: NonZeroUsize) -> Result<Vec<u8>> {
         let mut buffer = vec![0u8; size.get()];
         if unsafe {
             ReadProcessMemory(
