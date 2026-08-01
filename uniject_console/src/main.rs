@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::exit;
 
@@ -137,8 +138,8 @@ fn eject_assembly(
     }
 }
 
-fn parse_assembly_address(addr_str: &str) -> usize {
-    if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
+fn parse_assembly_address(addr_str: &str) -> NonZeroUsize {
+    let address = if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
         usize::from_str_radix(&addr_str[2..], 16).unwrap_or_else(|_| {
             error!("Invalid hex address: {}", addr_str);
             exit(1);
@@ -148,7 +149,12 @@ fn parse_assembly_address(addr_str: &str) -> usize {
             error!("Invalid address: {}", addr_str);
             exit(1);
         })
-    }
+    };
+
+    NonZeroUsize::new(address).unwrap_or_else(|| {
+        error!("Assembly address cannot be zero");
+        exit(1);
+    })
 }
 
 fn format_address<T: Display + std::fmt::UpperHex>(address: T, is_64_bit: bool) -> String {

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::LazyLock;
 
@@ -9,25 +10,25 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::assembler::Assembler;
 use crate::injector_exceptions::InjectorException;
-use crate::memory::Memory;
+use crate::memory::{Memory, checked_add, checked_mul};
 use crate::process::{
     find_process_id_by_name, get_exported_functions, get_mono_module, is_64_bit_process,
 };
 
-static EXPORTS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
+static EXPORTS: LazyLock<HashMap<&'static str, Option<NonZeroUsize>>> = LazyLock::new(|| {
     HashMap::from([
-        ("mono_get_root_domain", 0),
-        ("mono_thread_attach", 0),
-        ("mono_image_open_from_data", 0),
-        ("mono_assembly_load_from_full", 0),
-        ("mono_assembly_get_image", 0),
-        ("mono_class_from_name", 0),
-        ("mono_class_get_method_from_name", 0),
-        ("mono_runtime_invoke", 0),
-        ("mono_assembly_close", 0),
-        ("mono_image_strerror", 0),
-        ("mono_object_get_class", 0),
-        ("mono_class_get_name", 0),
+        ("mono_get_root_domain", None),
+        ("mono_thread_attach", None),
+        ("mono_image_open_from_data", None),
+        ("mono_assembly_load_from_full", None),
+        ("mono_assembly_get_image", None),
+        ("mono_class_from_name", None),
+        ("mono_class_get_method_from_name", None),
+        ("mono_runtime_invoke", None),
+        ("mono_assembly_close", None),
+        ("mono_image_strerror", None),
+        ("mono_object_get_class", None),
+        ("mono_class_get_name", None),
     ])
 });
 
@@ -52,10 +53,10 @@ impl From<i32> for MonoImageOpenStatus {
 
 pub struct Injector {
     memory: Memory<OwnedHandle>,
-    exports: HashMap<&'static str, usize>,
-    root_domain: usize,
+    exports: HashMap<&'static str, Option<NonZeroUsize>>,
+    root_domain: Option<NonZeroUsize>,
     attach: bool,
-    mono_module: usize,
+    mono_module: NonZeroUsize,
     pub is_64_bit: bool,
 }
 
@@ -106,7 +107,7 @@ impl Injector {
         Ok(Injector {
             memory,
             exports: EXPORTS.clone(),
-            root_domain: 0,
+            root_domain: None,
             attach: false,
             mono_module,
             is_64_bit,
@@ -118,12 +119,12 @@ impl Injector {
 
         for ef in exported_functions {
             if let Some(export) = self.exports.get_mut(&*ef.name) {
-                *export = ef.address.get();
+                *export = Some(ef.address);
             }
         }
 
         for (name, &address) in &self.exports {
-            if address == 0 {
+            if address.is_none() {
                 return Err(InjectorException::new(&format!(
                     "Failed to obtain the address of {name}()"
                 )));
@@ -133,13 +134,21 @@ impl Injector {
         Ok(())
     }
 
+    fn export(&self, name: &'static str) -> Result<NonZeroUsize, InjectorException> {
+        self.exports
+            .get(name)
+            .copied()
+            .flatten()
+            .ok_or_else(|| InjectorException::new(&format!("{name} export not found")))
+    }
+
     pub fn inject(
         &mut self,
         raw_assembly: &[u8],
         namespace: &str,
         class_name: &str,
         method_name: &str,
-    ) -> Result<usize, InjectorException> {
+    ) -> Result<NonZeroUsize, InjectorException> {
         if raw_assembly.is_empty() {
             return Err(InjectorException::new("rawAssembly cannot be empty"));
         }
@@ -154,7 +163,7 @@ impl Injector {
 
         self.obtain_mono_exports()?;
 
-        self.root_domain = self.get_root_domain()?;
+        self.root_domain = Some(self.get_root_domain()?);
         let raw_image = self.open_image_from_data(raw_assembly)?;
 
         self.attach = true;
@@ -170,15 +179,11 @@ impl Injector {
 
     pub fn eject(
         &mut self,
-        assembly: usize,
+        assembly: NonZeroUsize,
         namespace: &str,
         class_name: &str,
         method_name: &str,
     ) -> Result<(), InjectorException> {
-        if assembly == 0 {
-            return Err(InjectorException::new("Assembly cannot be zero"));
-        }
-
         if class_name.is_empty() {
             return Err(InjectorException::new("Class name cannot be null"));
         }
@@ -188,7 +193,7 @@ impl Injector {
         }
 
         self.obtain_mono_exports()?;
-        self.root_domain = self.get_root_domain()?;
+        self.root_domain = Some(self.get_root_domain()?);
         self.attach = true;
 
         let image = self.get_image_from_assembly(assembly)?;
@@ -201,43 +206,30 @@ impl Injector {
         Ok(())
     }
 
-    fn throw_if_null(&self, ptr: usize, method_name: &str) -> Result<(), InjectorException> {
-        if ptr == 0 {
-            return Err(InjectorException::new(&format!("{method_name}() returned NULL")));
-        }
-
-        Ok(())
+    pub fn get_root_domain(&mut self) -> Result<NonZeroUsize, InjectorException> {
+        let address = self.export(Self::MONO_GET_ROOT_DOMAIN)?;
+        let root_domain = self.execute(address, &[])?;
+        NonZeroUsize::new(root_domain).ok_or_else(|| {
+            InjectorException::new(&format!("{}() returned NULL", Self::MONO_GET_ROOT_DOMAIN))
+        })
     }
 
-    pub fn get_root_domain(&mut self) -> Result<usize, InjectorException> {
-        let root_domain = self.execute(
-            *self
-                .exports
-                .get(Self::MONO_GET_ROOT_DOMAIN)
-                .ok_or_else(|| InjectorException::new("Mono get root domain export not found"))?,
-            &[],
-        )?;
-        self.throw_if_null(root_domain, Self::MONO_GET_ROOT_DOMAIN)?;
-
-        Ok(root_domain)
-    }
-
-    pub fn open_image_from_data(&mut self, assembly: &[u8]) -> Result<usize, InjectorException> {
+    pub fn open_image_from_data(
+        &mut self,
+        assembly: &[u8],
+    ) -> Result<NonZeroUsize, InjectorException> {
         //allocate space for pointer
-        let status_ptr = self.memory.allocate(4)?;
+        let status_ptr = self.memory.allocate_and_write_int(0)?;
 
         let assembly_data_ptr = self.memory.allocate_and_write(assembly)?;
 
         //fetch
-        let mono_image_open_from_data_address = *self
-            .exports
-            .get(Self::MONO_IMAGE_OPEN_FROM_DATA)
-            .ok_or_else(|| InjectorException::new("Mono image open from data export not found"))?;
+        let mono_image_open_from_data_address = self.export(Self::MONO_IMAGE_OPEN_FROM_DATA)?;
 
         //execute with pre alloc
         let raw_image = self.execute(
             mono_image_open_from_data_address,
-            &[assembly_data_ptr, assembly.len(), 1, status_ptr],
+            &[assembly_data_ptr.get(), assembly.len(), 1, status_ptr.get()],
         )?;
 
         //read status
@@ -245,13 +237,13 @@ impl Injector {
 
         if status != MonoImageOpenStatus::Ok {
             //get error msg ptr
-            let mono_image_strerror_address = *self
-                .exports
-                .get(Self::MONO_IMAGE_STRERROR)
-                .ok_or_else(|| InjectorException::new("Mono image strerror export not found"))?;
+            let mono_image_strerror_address = self.export(Self::MONO_IMAGE_STRERROR)?;
             let message_ptr = self.execute(mono_image_strerror_address, &[status as usize])?;
 
             //read msg
+            let message_ptr = NonZeroUsize::new(message_ptr).ok_or_else(|| {
+                InjectorException::new(&format!("{}() returned NULL", Self::MONO_IMAGE_STRERROR))
+            })?;
             let message = self.memory.read_string(message_ptr, 256)?;
             return Err(InjectorException::new(&format!(
                 "{}() failed: {}",
@@ -260,30 +252,31 @@ impl Injector {
             )));
         }
 
-        Ok(raw_image)
+        NonZeroUsize::new(raw_image).ok_or_else(|| {
+            InjectorException::new(&format!("{}() returned NULL", Self::MONO_IMAGE_OPEN_FROM_DATA))
+        })
     }
 
-    pub fn open_assembly_from_image(&mut self, image: usize) -> Result<usize, InjectorException> {
-        let status_ptr = self.memory.allocate(4)?;
+    pub fn open_assembly_from_image(
+        &mut self,
+        image: NonZeroUsize,
+    ) -> Result<NonZeroUsize, InjectorException> {
+        let status_ptr = self.memory.allocate_and_write_int(0)?;
         let empty_array_ptr = self.memory.allocate_and_write(&[0u8])?;
 
-        let assembly = self.execute(
-            *self.exports.get(Self::MONO_ASSEMBLY_LOAD_FROM_FULL).ok_or_else(|| {
-                InjectorException::new("Mono assembly load from full export not found")
-            })?,
-            &[image, empty_array_ptr, status_ptr, 0],
-        )?;
+        let address = self.export(Self::MONO_ASSEMBLY_LOAD_FROM_FULL)?;
+        let assembly =
+            self.execute(address, &[image.get(), empty_array_ptr.get(), status_ptr.get(), 0])?;
 
         let status = MonoImageOpenStatus::from(self.memory.read_int(status_ptr)?);
 
         if status != MonoImageOpenStatus::Ok {
-            let message_ptr = self.execute(
-                *self.exports.get(Self::MONO_IMAGE_STRERROR).ok_or_else(|| {
-                    InjectorException::new("Mono image strerror export not found")
-                })?,
-                &[status as usize],
-            )?;
+            let address = self.export(Self::MONO_IMAGE_STRERROR)?;
+            let message_ptr = self.execute(address, &[status as usize])?;
 
+            let message_ptr = NonZeroUsize::new(message_ptr).ok_or_else(|| {
+                InjectorException::new(&format!("{}() returned NULL", Self::MONO_IMAGE_STRERROR))
+            })?;
             let message = self.memory.read_string(message_ptr, 256)?;
             return Err(InjectorException::new(&format!(
                 "{}() failed: {}",
@@ -292,91 +285,95 @@ impl Injector {
             )));
         }
 
-        Ok(assembly)
+        NonZeroUsize::new(assembly).ok_or_else(|| {
+            InjectorException::new(&format!(
+                "{}() returned NULL",
+                Self::MONO_ASSEMBLY_LOAD_FROM_FULL
+            ))
+        })
     }
 
-    pub fn get_image_from_assembly(&mut self, assembly: usize) -> Result<usize, InjectorException> {
-        let image = self.execute(
-            *self.exports.get(Self::MONO_ASSEMBLY_GET_IMAGE).ok_or_else(|| {
-                InjectorException::new("Mono assembly get image export not found")
-            })?,
-            &[assembly],
-        )?;
-        self.throw_if_null(image, Self::MONO_ASSEMBLY_GET_IMAGE)?;
-
-        Ok(image)
+    pub fn get_image_from_assembly(
+        &mut self,
+        assembly: NonZeroUsize,
+    ) -> Result<NonZeroUsize, InjectorException> {
+        let address = self.export(Self::MONO_ASSEMBLY_GET_IMAGE)?;
+        let image = self.execute(address, &[assembly.get()])?;
+        NonZeroUsize::new(image).ok_or_else(|| {
+            InjectorException::new(&format!("{}() returned NULL", Self::MONO_ASSEMBLY_GET_IMAGE))
+        })
     }
 
     pub fn get_class_from_name(
         &mut self,
-        image: usize,
+        image: NonZeroUsize,
         namespace: &str,
         class_name: &str,
-    ) -> Result<usize, InjectorException> {
+    ) -> Result<NonZeroUsize, InjectorException> {
         let namespace_ptr = self.memory.allocate_and_write(namespace.as_bytes())?;
         let class_name_ptr = self.memory.allocate_and_write(class_name.as_bytes())?;
 
-        let class = self.execute(
-            *self
-                .exports
-                .get(Self::MONO_CLASS_FROM_NAME)
-                .ok_or_else(|| InjectorException::new("Mono class from name export not found"))?,
-            &[image, namespace_ptr, class_name_ptr],
-        )?;
-        self.throw_if_null(class, Self::MONO_CLASS_FROM_NAME)?;
-
-        Ok(class)
+        let address = self.export(Self::MONO_CLASS_FROM_NAME)?;
+        let class =
+            self.execute(address, &[image.get(), namespace_ptr.get(), class_name_ptr.get()])?;
+        NonZeroUsize::new(class).ok_or_else(|| {
+            InjectorException::new(&format!("{}() returned NULL", Self::MONO_CLASS_FROM_NAME))
+        })
     }
 
     pub fn get_method_from_name(
         &mut self,
-        class: usize,
+        class: NonZeroUsize,
         method_name: &str,
-    ) -> Result<usize, InjectorException> {
+    ) -> Result<NonZeroUsize, InjectorException> {
         let method_name_ptr = self.memory.allocate_and_write(method_name.as_bytes())?;
 
-        let method = self.execute(
-            *self.exports.get(Self::MONO_CLASS_GET_METHOD_FROM_NAME).ok_or_else(|| {
-                InjectorException::new("Mono class get method from name export not found")
-            })?,
-            &[class, method_name_ptr, 0],
-        )?;
-        self.throw_if_null(method, Self::MONO_CLASS_GET_METHOD_FROM_NAME)?;
-
-        Ok(method)
+        let address = self.export(Self::MONO_CLASS_GET_METHOD_FROM_NAME)?;
+        let method = self.execute(address, &[class.get(), method_name_ptr.get(), 0])?;
+        NonZeroUsize::new(method).ok_or_else(|| {
+            InjectorException::new(&format!(
+                "{}() returned NULL",
+                Self::MONO_CLASS_GET_METHOD_FROM_NAME
+            ))
+        })
     }
 
-    pub fn get_class_name(&mut self, mono_object: usize) -> Result<String, InjectorException> {
-        let class_address = self.execute(
-            *self
-                .exports
-                .get(Self::MONO_OBJECT_GET_CLASS)
-                .ok_or_else(|| InjectorException::new("Mono object get class export not found"))?,
-            &[mono_object],
-        )?;
-        self.throw_if_null(class_address, Self::MONO_OBJECT_GET_CLASS)?;
+    pub fn get_class_name(
+        &mut self,
+        mono_object: NonZeroUsize,
+    ) -> Result<String, InjectorException> {
+        let address = self.export(Self::MONO_OBJECT_GET_CLASS)?;
+        let class_address = self.execute(address, &[mono_object.get()])?;
+        let class_address = NonZeroUsize::new(class_address).ok_or_else(|| {
+            InjectorException::new(&format!("{}() returned NULL", Self::MONO_OBJECT_GET_CLASS))
+        })?;
 
-        let class_name_address = self.execute(
-            *self
-                .exports
-                .get(Self::MONO_CLASS_GET_NAME)
-                .ok_or_else(|| InjectorException::new("Mono class get name export not found"))?,
-            &[class_address],
-        )?;
-        self.throw_if_null(class_name_address, Self::MONO_CLASS_GET_NAME)?;
+        let address = self.export(Self::MONO_CLASS_GET_NAME)?;
+        let class_name_address = self.execute(address, &[class_address.get()])?;
+        let class_name_address = NonZeroUsize::new(class_name_address).ok_or_else(|| {
+            InjectorException::new(&format!("{}() returned NULL", Self::MONO_CLASS_GET_NAME))
+        })?;
 
         self.memory.read_string(class_name_address, 256)
     }
 
-    pub fn read_mono_string(&self, mono_string: usize) -> Result<String, InjectorException> {
+    pub fn read_mono_string(&self, mono_string: NonZeroUsize) -> Result<String, InjectorException> {
         let offset = if self.is_64_bit { 0x10 } else { 0x8 };
-        let len = self.memory.read_int(mono_string + offset)? as usize;
+        let len_address = checked_add(mono_string, offset)?;
+        let len = usize::try_from(self.memory.read_int(len_address)?)
+            .map_err(|_| InjectorException::new("Invalid Mono string length"))?;
+
+        if len == 0 {
+            return Ok(String::new());
+        }
 
         let offset_str = if self.is_64_bit { 0x14 } else { 0xC };
-        self.memory.read_unicode_string(mono_string + offset_str, len * 2)
+        let string_address = checked_add(mono_string, offset_str)?;
+        let byte_len = checked_mul(len, 2)?;
+        self.memory.read_unicode_string(string_address, byte_len)
     }
 
-    pub fn runtime_invoke(&mut self, method: usize) -> Result<(), InjectorException> {
+    pub fn runtime_invoke(&mut self, method: NonZeroUsize) -> Result<(), InjectorException> {
         let exc_ptr = if self.is_64_bit {
             self.memory.allocate_and_write_long(0)?
         } else {
@@ -384,19 +381,14 @@ impl Injector {
         };
 
         //res
-        self.execute(
-            *self
-                .exports
-                .get(Self::MONO_RUNTIME_INVOKE)
-                .ok_or_else(|| InjectorException::new("Mono runtime invoke export not found"))?,
-            &[method, 0, 0, exc_ptr],
-        )?;
+        let address = self.export(Self::MONO_RUNTIME_INVOKE)?;
+        self.execute(address, &[method.get(), 0, 0, exc_ptr.get()])?;
 
         let exc = self.memory.read_int(exc_ptr)? as usize;
-        if exc != 0 {
+        if let Some(exc) = NonZeroUsize::new(exc) {
             let class_name = self.get_class_name(exc)?;
-            let message =
-                self.read_mono_string(if self.is_64_bit { exc + 0x20 } else { exc + 0x10 })?;
+            let message_address = checked_add(exc, if self.is_64_bit { 0x20 } else { 0x10 })?;
+            let message = self.read_mono_string(message_address)?;
             return Err(InjectorException::new(&format!(
                 "The managed method threw an exception: ({class_name}) {message}"
             )));
@@ -405,19 +397,22 @@ impl Injector {
         Ok(())
     }
 
-    pub fn close_assembly(&mut self, assembly: usize) -> Result<(), InjectorException> {
-        let address = self
-            .exports
-            .get(Self::MONO_ASSEMBLY_CLOSE)
-            .ok_or_else(|| InjectorException::new("Mono assembly close export not found"))?;
+    pub fn close_assembly(&mut self, assembly: NonZeroUsize) -> Result<(), InjectorException> {
+        let address = self.export(Self::MONO_ASSEMBLY_CLOSE)?;
 
-        let result = self.execute(*address, &[assembly])?;
-        self.throw_if_null(result, Self::MONO_ASSEMBLY_CLOSE)?;
+        let result = self.execute(address, &[assembly.get()])?;
+        NonZeroUsize::new(result).ok_or_else(|| {
+            InjectorException::new(&format!("{}() returned NULL", Self::MONO_ASSEMBLY_CLOSE))
+        })?;
 
         Ok(())
     }
 
-    pub fn execute(&mut self, address: usize, args: &[usize]) -> Result<usize, InjectorException> {
+    pub fn execute(
+        &mut self,
+        address: NonZeroUsize,
+        args: &[usize],
+    ) -> Result<usize, InjectorException> {
         let ret_val_ptr = if self.is_64_bit {
             self.memory.allocate_and_write_long(0)?
         } else {
@@ -436,7 +431,7 @@ impl Injector {
                 Some(std::mem::transmute::<
                     usize,
                     unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
-                >(alloc)),
+                >(alloc.get())),
                 std::ptr::null(),
                 0,
                 &mut thread_id,
@@ -466,7 +461,7 @@ impl Injector {
             let function_name = self
                 .exports
                 .iter()
-                .find(|(_, addr)| **addr == address)
+                .find(|(_, export)| **export == Some(address))
                 .map(|(name, _)| *name)
                 .unwrap_or("unknown function");
 
@@ -480,8 +475,8 @@ impl Injector {
 
     pub fn assemble(
         &self,
-        function_ptr: usize,
-        ret_val_ptr: usize,
+        function_ptr: NonZeroUsize,
+        ret_val_ptr: NonZeroUsize,
         args: &[usize],
     ) -> Result<Vec<u8>, InjectorException> {
         if self.is_64_bit {
@@ -493,26 +488,28 @@ impl Injector {
 
     pub fn assemble_86(
         &self,
-        function_ptr: usize,
-        ret_val_ptr: usize,
+        function_ptr: NonZeroUsize,
+        ret_val_ptr: NonZeroUsize,
         args: &[usize],
     ) -> Result<Vec<u8>, InjectorException> {
         let mut asm = Assembler::new()?;
 
-        if self.attach {
-            if let Some(&mono_thread_attach) = self.exports.get(Self::MONO_THREAD_ATTACH) {
-                asm.push(self.root_domain as isize)?;
-                asm.mov_eax(mono_thread_attach as isize)?;
-                asm.call_eax()?;
-                asm.add_esp(4)?;
-            }
+        if let (true, Some(mono_thread_attach), Some(root_domain)) = (
+            self.attach,
+            self.exports.get(Self::MONO_THREAD_ATTACH).copied().flatten(),
+            self.root_domain,
+        ) {
+            asm.push(root_domain.get() as isize)?;
+            asm.mov_eax(mono_thread_attach.get() as isize)?;
+            asm.call_eax()?;
+            asm.add_esp(4)?;
         }
 
         for &arg in args.iter().rev() {
             asm.push(arg as isize)?;
         }
 
-        asm.mov_eax(function_ptr as isize)?;
+        asm.mov_eax(function_ptr.get() as isize)?;
         asm.call_eax()?;
         asm.add_esp((args.len() * 4) as u8)?;
         asm.mov_eax_to(ret_val_ptr)?;
@@ -523,23 +520,25 @@ impl Injector {
 
     pub fn assemble_64(
         &self,
-        function_ptr: usize,
-        ret_val_ptr: usize,
+        function_ptr: NonZeroUsize,
+        ret_val_ptr: NonZeroUsize,
         args: &[usize],
     ) -> Result<Vec<u8>, InjectorException> {
         let mut asm = Assembler::new()?;
 
         asm.sub_rsp(40)?;
 
-        if self.attach {
-            if let Some(&mono_thread_attach) = self.exports.get(Self::MONO_THREAD_ATTACH) {
-                asm.mov_rax(mono_thread_attach)?;
-                asm.mov_rcx(self.root_domain)?;
-                asm.call_rax()?;
-            }
+        if let (true, Some(mono_thread_attach), Some(root_domain)) = (
+            self.attach,
+            self.exports.get(Self::MONO_THREAD_ATTACH).copied().flatten(),
+            self.root_domain,
+        ) {
+            asm.mov_rax(mono_thread_attach.get())?;
+            asm.mov_rcx(root_domain.get())?;
+            asm.call_rax()?;
         }
 
-        asm.mov_rax(function_ptr)?;
+        asm.mov_rax(function_ptr.get())?;
 
         for (i, &arg) in args.iter().enumerate() {
             match i {

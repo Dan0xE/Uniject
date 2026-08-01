@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use iced_x86::code_asm::*;
 
 use crate::injector_exceptions::InjectorException;
@@ -45,8 +47,8 @@ impl Assembler {
         Ok(self.asm.add(rsp, arg as i32)?)
     }
 
-    pub fn mov_rax_to(&mut self, dest: usize) -> AssemblerResult<()> {
-        Ok(self.asm.mov(qword_ptr(dest as u64), rax)?)
+    pub fn mov_rax_to(&mut self, dest: NonZeroUsize) -> AssemblerResult<()> {
+        Ok(self.asm.mov(qword_ptr(dest.get() as u64), rax)?)
     }
 
     pub fn push(&mut self, arg: isize) -> AssemblerResult<()> {
@@ -65,8 +67,8 @@ impl Assembler {
         Ok(self.asm.add(esp, arg as i32)?)
     }
 
-    pub fn mov_eax_to(&mut self, dest: usize) -> AssemblerResult<()> {
-        Ok(self.asm.mov(dword_ptr(dest as u64), eax)?)
+    pub fn mov_eax_to(&mut self, dest: NonZeroUsize) -> AssemblerResult<()> {
+        Ok(self.asm.mov(dword_ptr(dest.get() as u64), eax)?)
     }
 
     pub fn return_(&mut self) -> AssemblerResult<()> {

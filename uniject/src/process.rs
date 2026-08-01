@@ -13,7 +13,7 @@ use windows_sys::Win32::System::ProcessStatus::{
 use windows_sys::Win32::System::Threading::IsWow64Process;
 
 use crate::injector_exceptions::InjectorException;
-use crate::memory::Memory;
+use crate::memory::{Memory, checked_add, checked_mul};
 
 pub struct ExportedFunction {
     pub name: String,
@@ -67,44 +67,51 @@ pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
 
 pub fn get_exported_functions(
     handle: BorrowedHandle<'_>,
-    mod_address: usize,
+    mod_address: NonZeroUsize,
 ) -> Result<Vec<ExportedFunction>, InjectorException> {
     let mut exported_functions = Vec::new();
     let is_64_bit = is_64_bit_process(handle)?;
 
     let memory = Memory::new(handle);
     //nt header offset
-    let e_lfanew = memory.read_int(mod_address + 0x3C)? as usize;
-    let nt_headers = mod_address + e_lfanew as usize;
+    let e_lfanew = usize::try_from(memory.read_int(checked_add(mod_address, 0x3C)?)?)
+        .map_err(|_| InjectorException::new("Invalid PE header offset"))?;
+    let nt_headers = checked_add(mod_address, e_lfanew)?;
 
-    let optional_header = nt_headers + 0x18;
-    let data_directory = optional_header + if is_64_bit { 0x70 } else { 0x60 };
+    let optional_header = checked_add(nt_headers, 0x18)?;
+    let data_directory = checked_add(optional_header, if is_64_bit { 0x70 } else { 0x60 })?;
 
-    let export_directory = mod_address + memory.read_int(data_directory)? as usize;
-    let names = mod_address + memory.read_int(export_directory + 0x20)? as usize;
-    let ordinals = mod_address + memory.read_int(export_directory + 0x24)? as usize;
-    let functions = mod_address + memory.read_int(export_directory + 0x1C)? as usize;
-    let count = memory.read_int(export_directory + 0x18)? as usize;
+    let export_directory = checked_add(mod_address, memory.read_uint(data_directory)? as usize)?;
+    let names =
+        checked_add(mod_address, memory.read_uint(checked_add(export_directory, 0x20)?)? as usize)?;
+    let ordinals =
+        checked_add(mod_address, memory.read_uint(checked_add(export_directory, 0x24)?)? as usize)?;
+    let functions =
+        checked_add(mod_address, memory.read_uint(checked_add(export_directory, 0x1C)?)? as usize)?;
+    let count = memory.read_uint(checked_add(export_directory, 0x18)?)? as usize;
 
     for i in 0..count {
-        let offset = memory.read_int(names + i as usize * 4)? as usize;
-        let name = memory.read_string(mod_address + offset as usize, 32)?;
-        let ordinal = memory.read_short(ordinals + i as usize * 2)?;
+        let name_offset = checked_mul(i, 4)?;
+        let offset = memory.read_uint(checked_add(names, name_offset)?)? as usize;
+        let name = memory.read_string(checked_add(mod_address, offset)?, 32)?;
 
-        let address = NonZeroUsize::new(
-            mod_address + memory.read_int(functions + ordinal as usize * 4)? as usize,
-        );
+        let ordinal_offset = checked_mul(i, 2)?;
+        let ordinal = memory.read_ushort(checked_add(ordinals, ordinal_offset)?)?;
 
-        if address.is_some() {
-            // SAFETY: Address is guaranteed to be non-zero, so unwrap is safe here.
-            exported_functions.push(ExportedFunction::new(&name, address.unwrap()));
-        }
+        let function_offset = checked_mul(usize::from(ordinal), 4)?;
+        let address = checked_add(
+            mod_address,
+            memory.read_uint(checked_add(functions, function_offset)?)? as usize,
+        )?;
+        exported_functions.push(ExportedFunction::new(&name, address));
     }
 
     Ok(exported_functions)
 }
 
-pub fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<usize>, InjectorException> {
+pub fn get_mono_module(
+    handle: BorrowedHandle<'_>,
+) -> Result<Option<NonZeroUsize>, InjectorException> {
     let mut bytes_needed: u32 = 0;
     let raw_handle = handle.as_raw_handle() as HANDLE;
 
@@ -158,10 +165,12 @@ pub fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<usize>, Inje
                 return Err(InjectorException::new("Failed to get module information"));
             }
 
-            let funcs = get_exported_functions(handle, info.lpBaseOfDll as usize)?;
+            let module_address = NonZeroUsize::new(info.lpBaseOfDll as usize)
+                .ok_or_else(|| InjectorException::new("Module has a null base address"))?;
+            let funcs = get_exported_functions(handle, module_address)?;
 
             if funcs.iter().any(|f| f.name == "mono_get_root_domain") {
-                return Ok(Some(info.lpBaseOfDll as usize));
+                return Ok(Some(module_address));
             }
         }
     }
