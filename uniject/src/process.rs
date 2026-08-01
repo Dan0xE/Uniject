@@ -41,20 +41,26 @@ fn get_exported_functions(
         checked_add(mod_address, memory.read_uint(checked_add(export_directory, 0x24)?)? as usize)?;
     let functions_address =
         checked_add(mod_address, memory.read_uint(checked_add(export_directory, 0x1C)?)? as usize)?;
-    let count = memory.read_uint(checked_add(export_directory, 0x18)?)? as usize;
+    let function_count = memory.read_uint(checked_add(export_directory, 0x14)?)? as usize;
+    let name_count = memory.read_uint(checked_add(export_directory, 0x18)?)? as usize;
 
-    if count == 0 {
+    if name_count == 0 {
         return Ok(Vec::new());
     }
 
-    let names_size = NonZeroUsize::new(checked_mul(count, size_of::<u32>())?)
+    let names_size = NonZeroUsize::new(checked_mul(name_count, size_of::<u32>())?)
         .ok_or(Error::ArithmeticOverflow)?;
-    let ordinals_size = NonZeroUsize::new(checked_mul(count, size_of::<u16>())?)
+    let ordinals_size = NonZeroUsize::new(checked_mul(name_count, size_of::<u16>())?)
         .ok_or(Error::ArithmeticOverflow)?;
     let names = memory.read_bytes(names_address, names_size)?;
     let ordinals = memory.read_bytes(ordinals_address, ordinals_size)?;
+    let functions_size = checked_mul(function_count, size_of::<u32>())?;
+    let functions = match NonZeroUsize::new(functions_size) {
+        Some(size) => memory.read_bytes(functions_address, size)?,
+        None => Vec::new(),
+    };
 
-    let mut exported_functions = Vec::with_capacity(count);
+    let mut exported_functions = Vec::with_capacity(name_count);
     for (name, ordinal) in
         names.chunks_exact(size_of::<u32>()).zip(ordinals.chunks_exact(size_of::<u16>()))
     {
@@ -62,11 +68,18 @@ fn get_exported_functions(
         let name = memory.read_string(checked_add(mod_address, offset)?, 32)?;
 
         let ordinal = u16::from_le_bytes([ordinal[0], ordinal[1]]);
+        if usize::from(ordinal) >= function_count {
+            return Err(Error::InvalidExportOrdinal { ordinal, function_count });
+        }
+
         let function_offset = checked_mul(usize::from(ordinal), size_of::<u32>())?;
-        let address = checked_add(
-            mod_address,
-            memory.read_uint(checked_add(functions_address, function_offset)?)? as usize,
-        )?;
+        let function_rva = u32::from_le_bytes([
+            functions[function_offset],
+            functions[function_offset + 1],
+            functions[function_offset + 2],
+            functions[function_offset + 3],
+        ]);
+        let address = checked_add(mod_address, function_rva as usize)?;
         exported_functions.push(ExportedFunction { name, address });
     }
 

@@ -53,6 +53,9 @@ pub enum Error {
     #[error("module has a null base address")]
     NullModuleBase,
 
+    #[error("PE export ordinal {ordinal} exceeds the function table length of {function_count}")]
+    InvalidExportOrdinal { ordinal: u16, function_count: usize },
+
     #[error("memory address overflow")]
     AddressOverflow,
 
