@@ -15,15 +15,9 @@ use windows_sys::Win32::System::Threading::IsWow64Process;
 use crate::error::{Error, Result};
 use crate::memory::{Memory, checked_add, checked_mul};
 
-pub struct ExportedFunction {
-    pub name: String,
-    pub address: NonZeroUsize,
-}
-
-impl ExportedFunction {
-    pub fn new(name: &str, address: NonZeroUsize) -> Self {
-        ExportedFunction { name: name.to_string(), address }
-    }
+pub(crate) struct ExportedFunction {
+    pub(crate) name: String,
+    pub(crate) address: NonZeroUsize,
 }
 
 pub fn find_process_id_by_name(process_name: &str) -> Result<u32> {
@@ -69,7 +63,7 @@ pub fn find_process_id_by_name(process_name: &str) -> Result<u32> {
     process_id.ok_or(Error::ProcessNotFound { name: requested_name })
 }
 
-pub fn get_exported_functions(
+pub(crate) fn get_exported_functions(
     handle: BorrowedHandle<'_>,
     mod_address: NonZeroUsize,
 ) -> Result<Vec<ExportedFunction>> {
@@ -106,13 +100,13 @@ pub fn get_exported_functions(
             mod_address,
             memory.read_uint(checked_add(functions, function_offset)?)? as usize,
         )?;
-        exported_functions.push(ExportedFunction::new(&name, address));
+        exported_functions.push(ExportedFunction { name, address });
     }
 
     Ok(exported_functions)
 }
 
-pub fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<NonZeroUsize>> {
+pub(crate) fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<NonZeroUsize>> {
     let mut bytes_needed: u32 = 0;
     let raw_handle = handle.as_raw_handle() as HANDLE;
 
@@ -188,7 +182,7 @@ pub fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<NonZeroUsize
     Ok(None)
 }
 
-pub fn is_64_bit_process(handle: BorrowedHandle<'_>) -> Result<bool> {
+pub(crate) fn is_64_bit_process(handle: BorrowedHandle<'_>) -> Result<bool> {
     if !cfg!(target_pointer_width = "64") {
         return Ok(false);
     }

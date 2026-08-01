@@ -103,7 +103,7 @@ fn inject_assembly(
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("unknown"),
-                format_address(remote_assembly, injector.is_64_bit)
+                format_address(remote_assembly, injector.is_64_bit())
             );
         }
         Err(e) => error!("Failed to inject assembly: {}", e),

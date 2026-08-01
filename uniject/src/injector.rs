@@ -31,7 +31,7 @@ static EXPORTS: LazyLock<HashMap<&'static str, Option<NonZeroUsize>>> = LazyLock
 });
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum MonoImageOpenStatus {
+enum MonoImageOpenStatus {
     Ok,
     ErrorErrno,
     MissingAssemblyRef,
@@ -55,7 +55,7 @@ pub struct Injector {
     root_domain: Option<NonZeroUsize>,
     attach: bool,
     mono_module: NonZeroUsize,
-    pub is_64_bit: bool,
+    is_64_bit: bool,
 }
 
 impl Injector {
@@ -100,7 +100,11 @@ impl Injector {
         })
     }
 
-    pub fn obtain_mono_exports(&mut self) -> Result<()> {
+    pub fn is_64_bit(&self) -> bool {
+        self.is_64_bit
+    }
+
+    fn obtain_mono_exports(&mut self) -> Result<()> {
         let exported_functions = get_exported_functions(self.memory.as_handle(), self.mono_module)?;
 
         for ef in exported_functions {
@@ -187,13 +191,13 @@ impl Injector {
         Ok(())
     }
 
-    pub fn get_root_domain(&mut self) -> Result<NonZeroUsize> {
+    fn get_root_domain(&mut self) -> Result<NonZeroUsize> {
         let address = self.export(Self::MONO_GET_ROOT_DOMAIN)?;
         let root_domain = self.execute(address, &[])?;
         NonZeroUsize::new(root_domain).ok_or(Error::NullReturn(Self::MONO_GET_ROOT_DOMAIN))
     }
 
-    pub fn open_image_from_data(&mut self, assembly: &[u8]) -> Result<NonZeroUsize> {
+    fn open_image_from_data(&mut self, assembly: &[u8]) -> Result<NonZeroUsize> {
         //allocate space for pointer
         let status_ptr = self.memory.allocate_and_write_int(0)?;
 
@@ -229,7 +233,7 @@ impl Injector {
         NonZeroUsize::new(raw_image).ok_or(Error::NullReturn(Self::MONO_IMAGE_OPEN_FROM_DATA))
     }
 
-    pub fn open_assembly_from_image(&mut self, image: NonZeroUsize) -> Result<NonZeroUsize> {
+    fn open_assembly_from_image(&mut self, image: NonZeroUsize) -> Result<NonZeroUsize> {
         let status_ptr = self.memory.allocate_and_write_int(0)?;
         let empty_array_ptr = self.memory.allocate_and_write(&[0u8])?;
 
@@ -255,13 +259,13 @@ impl Injector {
         NonZeroUsize::new(assembly).ok_or(Error::NullReturn(Self::MONO_ASSEMBLY_LOAD_FROM_FULL))
     }
 
-    pub fn get_image_from_assembly(&mut self, assembly: NonZeroUsize) -> Result<NonZeroUsize> {
+    fn get_image_from_assembly(&mut self, assembly: NonZeroUsize) -> Result<NonZeroUsize> {
         let address = self.export(Self::MONO_ASSEMBLY_GET_IMAGE)?;
         let image = self.execute(address, &[assembly.get()])?;
         NonZeroUsize::new(image).ok_or(Error::NullReturn(Self::MONO_ASSEMBLY_GET_IMAGE))
     }
 
-    pub fn get_class_from_name(
+    fn get_class_from_name(
         &mut self,
         image: NonZeroUsize,
         namespace: &str,
@@ -276,7 +280,7 @@ impl Injector {
         NonZeroUsize::new(class).ok_or(Error::NullReturn(Self::MONO_CLASS_FROM_NAME))
     }
 
-    pub fn get_method_from_name(
+    fn get_method_from_name(
         &mut self,
         class: NonZeroUsize,
         method_name: &str,
@@ -288,7 +292,7 @@ impl Injector {
         NonZeroUsize::new(method).ok_or(Error::NullReturn(Self::MONO_CLASS_GET_METHOD_FROM_NAME))
     }
 
-    pub fn get_class_name(&mut self, mono_object: NonZeroUsize) -> Result<String> {
+    fn get_class_name(&mut self, mono_object: NonZeroUsize) -> Result<String> {
         let address = self.export(Self::MONO_OBJECT_GET_CLASS)?;
         let class_address = self.execute(address, &[mono_object.get()])?;
         let class_address = NonZeroUsize::new(class_address)
@@ -302,7 +306,7 @@ impl Injector {
         self.memory.read_string(class_name_address, 256)
     }
 
-    pub fn read_mono_string(&self, mono_string: NonZeroUsize) -> Result<String> {
+    fn read_mono_string(&self, mono_string: NonZeroUsize) -> Result<String> {
         let offset = if self.is_64_bit { 0x10 } else { 0x8 };
         let len_address = checked_add(mono_string, offset)?;
         let len = usize::try_from(self.memory.read_int(len_address)?)?;
@@ -317,7 +321,7 @@ impl Injector {
         self.memory.read_unicode_string(string_address, byte_len)
     }
 
-    pub fn runtime_invoke(&mut self, method: NonZeroUsize) -> Result<()> {
+    fn runtime_invoke(&mut self, method: NonZeroUsize) -> Result<()> {
         let exc_ptr = if self.is_64_bit {
             self.memory.allocate_and_write_long(0)?
         } else {
@@ -339,7 +343,7 @@ impl Injector {
         Ok(())
     }
 
-    pub fn close_assembly(&mut self, assembly: NonZeroUsize) -> Result<()> {
+    fn close_assembly(&mut self, assembly: NonZeroUsize) -> Result<()> {
         let address = self.export(Self::MONO_ASSEMBLY_CLOSE)?;
 
         let result = self.execute(address, &[assembly.get()])?;
@@ -348,7 +352,7 @@ impl Injector {
         Ok(())
     }
 
-    pub fn execute(&mut self, address: NonZeroUsize, args: &[usize]) -> Result<usize> {
+    fn execute(&mut self, address: NonZeroUsize, args: &[usize]) -> Result<usize> {
         let ret_val_ptr = if self.is_64_bit {
             self.memory.allocate_and_write_long(0)?
         } else {
@@ -413,7 +417,7 @@ impl Injector {
         Ok(ret)
     }
 
-    pub fn assemble(
+    fn assemble(
         &self,
         function_ptr: NonZeroUsize,
         ret_val_ptr: NonZeroUsize,
@@ -426,7 +430,7 @@ impl Injector {
         }
     }
 
-    pub fn assemble_86(
+    fn assemble_86(
         &self,
         function_ptr: NonZeroUsize,
         ret_val_ptr: NonZeroUsize,
@@ -458,7 +462,7 @@ impl Injector {
         asm.to_byte_array()
     }
 
-    pub fn assemble_64(
+    fn assemble_64(
         &self,
         function_ptr: NonZeroUsize,
         ret_val_ptr: NonZeroUsize,

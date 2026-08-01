@@ -4,7 +4,6 @@ mod injector;
 mod memory;
 mod process;
 
-pub use assembler::*;
 pub use error::{Error, Result};
-pub use injector::*;
+pub use injector::Injector;
 pub use process::find_process_id_by_name;

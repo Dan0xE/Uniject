@@ -25,13 +25,13 @@ pub(crate) fn checked_mul(value: usize, multiplier: usize) -> Result<usize> {
     value.checked_mul(multiplier).ok_or(Error::ArithmeticOverflow)
 }
 
-pub struct Memory<H: AsHandle> {
+pub(crate) struct Memory<H: AsHandle> {
     handle: H,
     allocations: HashMap<NonZeroUsize, NonZeroUsize>,
 }
 
 impl<H: AsHandle> Memory<H> {
-    pub fn new(process_handle: H) -> Self {
+    pub(crate) fn new(process_handle: H) -> Self {
         Memory { handle: process_handle, allocations: HashMap::new() }
     }
 
@@ -39,7 +39,7 @@ impl<H: AsHandle> Memory<H> {
         self.handle.as_handle().as_raw_handle() as HANDLE
     }
 
-    pub fn read_string(&self, address: NonZeroUsize, length: usize) -> Result<String> {
+    pub(crate) fn read_string(&self, address: NonZeroUsize, length: usize) -> Result<String> {
         let mut bytes = Vec::new();
         for _ in 0..length {
             let address = checked_add(address, bytes.len())?;
@@ -53,7 +53,11 @@ impl<H: AsHandle> Memory<H> {
         Ok(String::from_utf8(bytes)?)
     }
 
-    pub fn read_unicode_string(&self, address: NonZeroUsize, length: usize) -> Result<String> {
+    pub(crate) fn read_unicode_string(
+        &self,
+        address: NonZeroUsize,
+        length: usize,
+    ) -> Result<String> {
         let Some(length) = NonZeroUsize::new(length) else {
             return Ok(String::new());
         };
@@ -63,22 +67,22 @@ impl<H: AsHandle> Memory<H> {
         Ok(String::from_utf16(&utf16_units)?)
     }
 
-    pub fn read_ushort(&self, address: NonZeroUsize) -> Result<u16> {
+    pub(crate) fn read_ushort(&self, address: NonZeroUsize) -> Result<u16> {
         let bytes = self.read_bytes(address, U16_SIZE)?;
         Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
-    pub fn read_int(&self, address: NonZeroUsize) -> Result<i32> {
+    pub(crate) fn read_int(&self, address: NonZeroUsize) -> Result<i32> {
         let bytes = self.read_bytes(address, I32_SIZE)?;
         Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    pub fn read_uint(&self, address: NonZeroUsize) -> Result<u32> {
+    pub(crate) fn read_uint(&self, address: NonZeroUsize) -> Result<u32> {
         let bytes = self.read_bytes(address, I32_SIZE)?;
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    pub fn read_long(&self, address: NonZeroUsize) -> Result<i64> {
+    pub(crate) fn read_long(&self, address: NonZeroUsize) -> Result<i64> {
         let bytes = self.read_bytes(address, I64_SIZE)?;
         Ok(i64::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -106,22 +110,22 @@ impl<H: AsHandle> Memory<H> {
         }
     }
 
-    pub fn allocate_and_write(&mut self, data: &[u8]) -> Result<NonZeroUsize> {
+    pub(crate) fn allocate_and_write(&mut self, data: &[u8]) -> Result<NonZeroUsize> {
         let size = NonZeroUsize::new(data.len()).ok_or(Error::EmptyBuffer)?;
         let addr = self.allocate(size)?;
         self.write(addr, data)?;
         Ok(addr)
     }
 
-    pub fn allocate_and_write_int(&mut self, data: i32) -> Result<NonZeroUsize> {
+    pub(crate) fn allocate_and_write_int(&mut self, data: i32) -> Result<NonZeroUsize> {
         self.allocate_and_write(&data.to_le_bytes())
     }
 
-    pub fn allocate_and_write_long(&mut self, data: i64) -> Result<NonZeroUsize> {
+    pub(crate) fn allocate_and_write_long(&mut self, data: i64) -> Result<NonZeroUsize> {
         self.allocate_and_write(&data.to_le_bytes())
     }
 
-    pub fn allocate(&mut self, size: NonZeroUsize) -> Result<NonZeroUsize> {
+    fn allocate(&mut self, size: NonZeroUsize) -> Result<NonZeroUsize> {
         let addr = unsafe {
             VirtualAllocEx(
                 self.raw_handle(),
@@ -140,7 +144,7 @@ impl<H: AsHandle> Memory<H> {
         Ok(addr)
     }
 
-    pub fn write(&self, address: NonZeroUsize, data: &[u8]) -> Result<()> {
+    fn write(&self, address: NonZeroUsize, data: &[u8]) -> Result<()> {
         let Some(size) = NonZeroUsize::new(data.len()) else {
             return Ok(());
         };
