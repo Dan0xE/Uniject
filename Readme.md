@@ -37,4 +37,4 @@ Uniject was created as a learning project to explore different injection techniq
 
 If you like this project, please also check out the original repo [here](https://github.com/warbler/SharpMonoInjector).
 
-Credits go to [warbler](https://github.com/warbler).
+Credits for the original C# implementation go to [warbler](https://github.com/warbler).
