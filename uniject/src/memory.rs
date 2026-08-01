@@ -11,10 +11,6 @@ use windows_sys::Win32::System::Memory::{
 
 use crate::error::{Error, Result};
 
-const U16_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<u16>()).unwrap();
-const I32_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<i32>()).unwrap();
-const U64_SIZE: NonZeroUsize = NonZeroUsize::new(size_of::<u64>()).unwrap();
-
 #[inline]
 pub(crate) fn checked_add(address: NonZeroUsize, offset: usize) -> Result<NonZeroUsize> {
     address.checked_add(offset).ok_or(Error::AddressOverflow)
@@ -40,32 +36,28 @@ impl<H: AsHandle> Memory<H> {
     }
 
     pub(crate) fn read_string(&self, address: NonZeroUsize, length: usize) -> Result<String> {
-        let mut bytes = Vec::new();
-        for _ in 0..length {
-            let address = checked_add(address, bytes.len())?;
-            let read = self.read_bytes(address, NonZeroUsize::MIN)?[0];
-            if read == 0x00 {
-                break;
-            }
-            bytes.push(read);
+        let Some(length) = NonZeroUsize::new(length) else {
+            return Ok(String::new());
+        };
+
+        let mut bytes = self.read_bytes(address, length)?;
+        if let Some(null_index) = bytes.iter().position(|&byte| byte == 0) {
+            bytes.truncate(null_index);
         }
 
         Ok(String::from_utf8(bytes)?)
     }
 
-    pub(crate) fn read_ushort(&self, address: NonZeroUsize) -> Result<u16> {
-        let bytes = self.read_bytes(address, U16_SIZE)?;
-        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-    }
-
     pub(crate) fn read_int(&self, address: NonZeroUsize) -> Result<i32> {
-        let bytes = self.read_bytes(address, I32_SIZE)?;
-        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        let mut bytes = [0; size_of::<i32>()];
+        self.read_into(address, &mut bytes)?;
+        Ok(i32::from_le_bytes(bytes))
     }
 
     pub(crate) fn read_uint(&self, address: NonZeroUsize) -> Result<u32> {
-        let bytes = self.read_bytes(address, I32_SIZE)?;
-        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        let mut bytes = [0; size_of::<u32>()];
+        self.read_into(address, &mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
     pub(crate) fn read_pointer(&self, address: NonZeroUsize, is_64_bit: bool) -> Result<usize> {
@@ -73,25 +65,29 @@ impl<H: AsHandle> Memory<H> {
             return Ok(self.read_uint(address)? as usize);
         }
 
-        let bytes = self.read_bytes(address, U64_SIZE)?;
-        Ok(usize::try_from(u64::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ]))?)
+        let mut bytes = [0; size_of::<u64>()];
+        self.read_into(address, &mut bytes)?;
+        Ok(usize::try_from(u64::from_le_bytes(bytes))?)
     }
 
     pub(crate) fn read_bytes(&self, address: NonZeroUsize, size: NonZeroUsize) -> Result<Vec<u8>> {
         let mut buffer = vec![0u8; size.get()];
+        self.read_into(address, &mut buffer)?;
+        Ok(buffer)
+    }
+
+    pub(crate) fn read_into(&self, address: NonZeroUsize, buffer: &mut [u8]) -> Result<()> {
         if unsafe {
             ReadProcessMemory(
                 self.raw_handle(),
                 address.get() as *const std::ffi::c_void,
                 buffer.as_mut_ptr() as *mut std::ffi::c_void,
-                size.get(),
+                buffer.len(),
                 std::ptr::null_mut(),
             )
         } != 0
         {
-            Ok(buffer)
+            Ok(())
         } else {
             Err(Error::Windows {
                 operation: "failed to read process memory",

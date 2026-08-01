@@ -26,8 +26,6 @@ fn get_exported_functions(
     mod_address: NonZeroUsize,
     is_64_bit: bool,
 ) -> Result<Vec<ExportedFunction>> {
-    let mut exported_functions = Vec::new();
-
     let memory = Memory::new(handle);
     //nt header offset
     let e_lfanew = usize::try_from(memory.read_int(checked_add(mod_address, 0x3C)?)?)?;
@@ -37,26 +35,37 @@ fn get_exported_functions(
     let data_directory = checked_add(optional_header, if is_64_bit { 0x70 } else { 0x60 })?;
 
     let export_directory = checked_add(mod_address, memory.read_uint(data_directory)? as usize)?;
-    let names =
+    let names_address =
         checked_add(mod_address, memory.read_uint(checked_add(export_directory, 0x20)?)? as usize)?;
-    let ordinals =
+    let ordinals_address =
         checked_add(mod_address, memory.read_uint(checked_add(export_directory, 0x24)?)? as usize)?;
-    let functions =
+    let functions_address =
         checked_add(mod_address, memory.read_uint(checked_add(export_directory, 0x1C)?)? as usize)?;
     let count = memory.read_uint(checked_add(export_directory, 0x18)?)? as usize;
 
-    for i in 0..count {
-        let name_offset = checked_mul(i, 4)?;
-        let offset = memory.read_uint(checked_add(names, name_offset)?)? as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let names_size = NonZeroUsize::new(checked_mul(count, size_of::<u32>())?)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let ordinals_size = NonZeroUsize::new(checked_mul(count, size_of::<u16>())?)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let names = memory.read_bytes(names_address, names_size)?;
+    let ordinals = memory.read_bytes(ordinals_address, ordinals_size)?;
+
+    let mut exported_functions = Vec::with_capacity(count);
+    for (name, ordinal) in
+        names.chunks_exact(size_of::<u32>()).zip(ordinals.chunks_exact(size_of::<u16>()))
+    {
+        let offset = u32::from_le_bytes([name[0], name[1], name[2], name[3]]) as usize;
         let name = memory.read_string(checked_add(mod_address, offset)?, 32)?;
 
-        let ordinal_offset = checked_mul(i, 2)?;
-        let ordinal = memory.read_ushort(checked_add(ordinals, ordinal_offset)?)?;
-
-        let function_offset = checked_mul(usize::from(ordinal), 4)?;
+        let ordinal = u16::from_le_bytes([ordinal[0], ordinal[1]]);
+        let function_offset = checked_mul(usize::from(ordinal), size_of::<u32>())?;
         let address = checked_add(
             mod_address,
-            memory.read_uint(checked_add(functions, function_offset)?)? as usize,
+            memory.read_uint(checked_add(functions_address, function_offset)?)? as usize,
         )?;
         exported_functions.push(ExportedFunction { name, address });
     }
