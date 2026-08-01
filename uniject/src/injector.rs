@@ -183,7 +183,8 @@ impl Injector {
         self.attach = true;
 
         self.invoke_assembly_method(assembly, namespace, class_name, method_name)?;
-        self.close_assembly(assembly)?;
+        let address = self.export(Self::MONO_ASSEMBLY_CLOSE)?;
+        self.execute(address, &[assembly.get()])?;
 
         Ok(())
     }
@@ -348,12 +349,6 @@ impl Injector {
         } else {
             self.memory.allocate_and_write(&0i32.to_le_bytes())
         }
-    }
-
-    fn close_assembly(&mut self, assembly: NonZeroUsize) -> Result<()> {
-        let address = self.export(Self::MONO_ASSEMBLY_CLOSE)?;
-        self.execute(address, &[assembly.get()])?;
-        Ok(())
     }
 
     fn execute(&mut self, address: NonZeroUsize, args: &[usize]) -> Result<usize> {
