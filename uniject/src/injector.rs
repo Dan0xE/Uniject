@@ -354,7 +354,11 @@ impl Injector {
     fn execute(&mut self, address: NonZeroUsize, args: &[usize]) -> Result<usize> {
         let ret_val_ptr = self.allocate_pointer()?;
 
-        let code = self.assemble(address, ret_val_ptr, args)?;
+        let code = if self.is_64_bit {
+            self.assemble_64(address, ret_val_ptr, args)?
+        } else {
+            self.assemble_86(address, ret_val_ptr, args)?
+        };
         let alloc = self.memory.allocate_and_write(&code)?;
 
         let mut thread_id: u32 = 0;
@@ -406,19 +410,6 @@ impl Injector {
         }
 
         Ok(ret)
-    }
-
-    fn assemble(
-        &self,
-        function_ptr: NonZeroUsize,
-        ret_val_ptr: NonZeroUsize,
-        args: &[usize],
-    ) -> Result<Vec<u8>> {
-        if self.is_64_bit {
-            self.assemble_64(function_ptr, ret_val_ptr, args)
-        } else {
-            self.assemble_86(function_ptr, ret_val_ptr, args)
-        }
     }
 
     fn assemble_86(

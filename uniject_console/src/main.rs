@@ -1,7 +1,6 @@
 mod process;
 
 use std::error::Error;
-use std::fmt::Display;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -102,13 +101,18 @@ fn inject_assembly(
 
     match injector.inject(&assembly, namespace, class_name, method_name) {
         Ok(remote_assembly) => {
+            let remote_assembly = if injector.is_64_bit() {
+                format!("0x{remote_assembly:016X}")
+            } else {
+                format!("0x{remote_assembly:08X}")
+            };
             info!(
                 "{}: {}",
                 Path::new(assembly_path)
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("unknown"),
-                format_address(remote_assembly, injector.is_64_bit())
+                remote_assembly
             );
         }
         Err(e) => error!("Failed to inject assembly: {}", e),
@@ -147,8 +151,4 @@ fn parse_assembly_address(addr_str: &str) -> NonZeroUsize {
         error!("Assembly address cannot be zero");
         exit(1);
     })
-}
-
-fn format_address<T: Display + std::fmt::UpperHex>(address: T, is_64_bit: bool) -> String {
-    if is_64_bit { format!("0x{:016X}", address) } else { format!("0x{:08X}", address) }
 }
