@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
@@ -8,18 +9,18 @@ use windows_sys::Win32::System::Memory::{
 
 use crate::injector_exceptions::InjectorException;
 
-pub struct Memory {
-    handle: HANDLE,
+pub struct Memory<H: AsHandle> {
+    handle: H,
     allocations: HashMap<usize, usize>,
 }
 
-impl Memory {
-    pub fn new(process_handle: HANDLE) -> Result<Self, InjectorException> {
-        if process_handle.is_null() {
-            Err(InjectorException::new("Invalid process handle"))
-        } else {
-            Ok(Memory { handle: process_handle, allocations: HashMap::new() })
-        }
+impl<H: AsHandle> Memory<H> {
+    pub fn new(process_handle: H) -> Self {
+        Memory { handle: process_handle, allocations: HashMap::new() }
+    }
+
+    fn raw_handle(&self) -> HANDLE {
+        self.handle.as_handle().as_raw_handle() as HANDLE
     }
 
     pub fn read_string(&self, address: usize, length: usize) -> Result<String, InjectorException> {
@@ -70,7 +71,7 @@ impl Memory {
         let mut buffer = vec![0u8; size];
         if unsafe {
             ReadProcessMemory(
-                self.handle,
+                self.raw_handle(),
                 address as *const std::ffi::c_void,
                 buffer.as_mut_ptr() as *mut std::ffi::c_void,
                 size,
@@ -104,7 +105,7 @@ impl Memory {
     pub fn allocate(&mut self, size: usize) -> Result<usize, InjectorException> {
         let addr = unsafe {
             VirtualAllocEx(
-                self.handle,
+                self.raw_handle(),
                 std::ptr::null(),
                 size,
                 MEM_COMMIT | MEM_RESERVE,
@@ -124,7 +125,7 @@ impl Memory {
         let size = data.len();
         if unsafe {
             WriteProcessMemory(
-                self.handle,
+                self.raw_handle(),
                 address as *const std::ffi::c_void,
                 data.as_ptr() as *const std::ffi::c_void,
                 size,
@@ -139,12 +140,22 @@ impl Memory {
     }
 }
 
-impl Drop for Memory {
+impl<H: AsHandle> AsHandle for Memory<H> {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+}
+
+impl<H: AsHandle> Drop for Memory<H> {
     fn drop(&mut self) {
         for (&address, &size) in &self.allocations {
             unsafe {
-                if VirtualFreeEx(self.handle, address as *mut std::ffi::c_void, size, MEM_DECOMMIT)
-                    == 0
+                if VirtualFreeEx(
+                    self.raw_handle(),
+                    address as *mut std::ffi::c_void,
+                    size,
+                    MEM_DECOMMIT,
+                ) == 0
                 {
                     eprintln!(
                         "Failed to free memory at address {address:X}: {}",

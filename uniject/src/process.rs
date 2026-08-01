@@ -1,8 +1,9 @@
 use std::mem::size_of;
 use std::num::NonZeroUsize;
+use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::ptr::null_mut;
 
-use windows_sys::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -30,16 +31,18 @@ pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
     let process_name =
         if process_name.ends_with(".exe") { process_name } else { format!("{process_name}.exe") };
 
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
+    let raw_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if raw_snapshot == INVALID_HANDLE_VALUE {
         return None;
     }
+    // SAFETY: CreateToolhelp32Snapshot returned a valid, owned handle.
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(raw_snapshot) };
 
     let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
     entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
 
     let mut process_id = None;
-    if unsafe { Process32FirstW(snapshot, &mut entry) } != 0 {
+    if unsafe { Process32FirstW(snapshot.as_raw_handle() as HANDLE, &mut entry) } != 0 {
         loop {
             let name_len = entry
                 .szExeFile
@@ -53,27 +56,23 @@ pub fn find_process_id_by_name(process_name: &str) -> Option<u32> {
                 break;
             }
 
-            if unsafe { Process32NextW(snapshot, &mut entry) } == 0 {
+            if unsafe { Process32NextW(snapshot.as_raw_handle() as HANDLE, &mut entry) } == 0 {
                 break;
             }
         }
-    }
-
-    unsafe {
-        CloseHandle(snapshot);
     }
 
     process_id
 }
 
 pub fn get_exported_functions(
-    handle: HANDLE,
+    handle: BorrowedHandle<'_>,
     mod_address: usize,
 ) -> Result<Vec<ExportedFunction>, InjectorException> {
     let mut exported_functions = Vec::new();
     let is_64_bit = is_64_bit_process(handle)?;
 
-    let memory = Memory::new(handle)?;
+    let memory = Memory::new(handle);
     //nt header offset
     let e_lfanew = memory.read_int(mod_address + 0x3C)? as usize;
     let nt_headers = mod_address + e_lfanew as usize;
@@ -105,12 +104,14 @@ pub fn get_exported_functions(
     Ok(exported_functions)
 }
 
-pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorException> {
+pub fn get_mono_module(handle: BorrowedHandle<'_>) -> Result<Option<usize>, InjectorException> {
     let mut bytes_needed: u32 = 0;
+    let raw_handle = handle.as_raw_handle() as HANDLE;
 
     //get required buffer size
-    if unsafe { EnumProcessModulesEx(handle, null_mut(), 0, &mut bytes_needed, LIST_MODULES_ALL) }
-        == 0
+    if unsafe {
+        EnumProcessModulesEx(raw_handle, null_mut(), 0, &mut bytes_needed, LIST_MODULES_ALL)
+    } == 0
         || bytes_needed == 0
     {
         return Err(InjectorException::new("Failed to enumerate process modules"));
@@ -123,7 +124,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
     //call with allocated buffer
     if unsafe {
         EnumProcessModulesEx(
-            handle,
+            raw_handle,
             ptrs.as_mut_ptr(),
             bytes_needed,
             &mut bytes_needed,
@@ -136,9 +137,9 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
 
     for &module in ptrs.iter() {
         let mut path = vec![0u8; 260];
-        let path_len =
-            unsafe { GetModuleFileNameExA(handle, module, path.as_mut_ptr(), path.len() as u32) }
-                as usize;
+        let path_len = unsafe {
+            GetModuleFileNameExA(raw_handle, module, path.as_mut_ptr(), path.len() as u32)
+        } as usize;
 
         if path_len == 0 {
             continue;
@@ -151,7 +152,7 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
                 MODULEINFO { lpBaseOfDll: null_mut(), SizeOfImage: 0, EntryPoint: null_mut() };
 
             if unsafe {
-                GetModuleInformation(handle, module, &mut info, size_of::<MODULEINFO>() as u32)
+                GetModuleInformation(raw_handle, module, &mut info, size_of::<MODULEINFO>() as u32)
             } == 0
             {
                 return Err(InjectorException::new("Failed to get module information"));
@@ -168,13 +169,13 @@ pub fn get_mono_module(handle: HANDLE) -> Result<Option<usize>, InjectorExceptio
     Ok(None)
 }
 
-pub fn is_64_bit_process(handle: HANDLE) -> Result<bool, InjectorException> {
+pub fn is_64_bit_process(handle: BorrowedHandle<'_>) -> Result<bool, InjectorException> {
     if !cfg!(target_pointer_width = "64") {
         return Ok(false);
     }
 
     let mut is_wow64 = BOOL::default();
-    if unsafe { IsWow64Process(handle, &mut is_wow64) } == 0 {
+    if unsafe { IsWow64Process(handle.as_raw_handle() as HANDLE, &mut is_wow64) } == 0 {
         Err(InjectorException::new("Failed to check Wow64 status"))
     } else {
         Ok(is_wow64 == 0 && size_of::<usize>() == 8)

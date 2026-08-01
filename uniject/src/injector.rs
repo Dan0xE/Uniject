@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::LazyLock;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
+use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
 use windows_sys::Win32::System::Threading::{
     CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject,
 };
@@ -50,8 +51,7 @@ impl From<i32> for MonoImageOpenStatus {
 }
 
 pub struct Injector {
-    handle: HANDLE,
-    memory: Memory,
+    memory: Memory<OwnedHandle>,
     exports: HashMap<&'static str, usize>,
     root_domain: usize,
     attach: bool,
@@ -84,27 +84,26 @@ impl Injector {
     }
 
     pub fn new(process_id: u32) -> Result<Self, InjectorException> {
-        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
+        let raw_handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
 
-        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        if raw_handle.is_null() || raw_handle == INVALID_HANDLE_VALUE {
             return Err(InjectorException::new(&format!(
                 "Failed to open process with ID {process_id}"
             )));
         }
+        // SAFETY: OpenProcess returned a valid, owned handle.
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw_handle) };
 
-        let mono_module = match get_mono_module(handle)? {
+        let mono_module = match get_mono_module(handle.as_handle())? {
             Some(module) => module,
             None => return Err(InjectorException::new("Mono module not found")),
         };
 
-        let is_64_bit = is_64_bit_process(handle)?;
+        let is_64_bit = is_64_bit_process(handle.as_handle())?;
 
-        let memory = Memory::new(handle).map_err(|err| {
-            InjectorException::with_inner("Failed to create memory handler", Box::new(err))
-        })?;
+        let memory = Memory::new(handle);
 
         Ok(Injector {
-            handle,
             memory,
             exports: EXPORTS.clone(),
             root_domain: 0,
@@ -114,16 +113,8 @@ impl Injector {
         })
     }
 
-    pub fn dispose(&mut self) {
-        unsafe {
-            if CloseHandle(self.handle) == 0 {
-                eprintln!("Failed to close process handle: {}", std::io::Error::last_os_error());
-            }
-        }
-    }
-
     pub fn obtain_mono_exports(&mut self) -> Result<(), InjectorException> {
-        let exported_functions = get_exported_functions(self.handle, self.mono_module)?;
+        let exported_functions = get_exported_functions(self.memory.as_handle(), self.mono_module)?;
 
         for ef in exported_functions {
             if let Some(export) = self.exports.get_mut(&*ef.name) {
@@ -439,7 +430,7 @@ impl Injector {
         let mut thread_id: u32 = 0;
         let thread = unsafe {
             CreateRemoteThread(
-                self.handle,
+                self.memory.as_handle().as_raw_handle() as HANDLE,
                 std::ptr::null(),
                 0,
                 Some(std::mem::transmute::<
@@ -456,7 +447,11 @@ impl Injector {
             return Err(InjectorException::new("Failed to create a remote thread"));
         }
 
-        let wait_result = unsafe { WaitForSingleObject(thread, u32::MAX) };
+        // SAFETY: CreateRemoteThread returned a valid, owned handle.
+        let thread = unsafe { OwnedHandle::from_raw_handle(thread) };
+
+        let wait_result =
+            unsafe { WaitForSingleObject(thread.as_raw_handle() as HANDLE, u32::MAX) };
         if wait_result == WAIT_FAILED {
             return Err(InjectorException::new("Failed to wait for a remote thread"));
         }
