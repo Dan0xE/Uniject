@@ -2,15 +2,15 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
+use windows_sys::Win32::Foundation::{BOOL, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
 use windows_sys::Win32::System::Threading::{
-    CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject,
+    CreateRemoteThread, IsWow64Process, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject,
 };
 
 use crate::assembler::Assembler;
 use crate::error::{Error, Result};
 use crate::memory::{Memory, checked_add, checked_mul};
-use crate::process::{get_mono_module, is_64_bit_process};
+use crate::process::get_mono_module;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MonoImageOpenStatus {
@@ -66,7 +66,22 @@ impl Injector {
         // SAFETY: OpenProcess returned a valid, owned handle.
         let handle = unsafe { OwnedHandle::from_raw_handle(raw_handle) };
 
-        let is_64_bit = is_64_bit_process(handle.as_handle())?;
+        let is_64_bit = if cfg!(target_pointer_width = "64") {
+            let mut is_wow64 = BOOL::default();
+            if unsafe {
+                IsWow64Process(handle.as_handle().as_raw_handle() as HANDLE, &mut is_wow64)
+            } == 0
+            {
+                return Err(Error::Windows {
+                    operation: "failed to check Wow64 status",
+                    source: std::io::Error::last_os_error(),
+                });
+            }
+            is_wow64 == 0
+        } else {
+            false
+        };
+
         let mono_module =
             get_mono_module(handle.as_handle(), is_64_bit)?.ok_or(Error::MonoModuleNotFound)?;
 

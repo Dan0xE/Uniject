@@ -3,11 +3,10 @@ use std::num::NonZeroUsize;
 use std::os::windows::io::{AsRawHandle, BorrowedHandle};
 use std::ptr::null_mut;
 
-use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE};
+use windows_sys::Win32::Foundation::{HANDLE, HMODULE};
 use windows_sys::Win32::System::ProcessStatus::{
     EnumProcessModulesEx, GetModuleFileNameExA, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO,
 };
-use windows_sys::Win32::System::Threading::IsWow64Process;
 
 use crate::error::{Error, Result};
 use crate::memory::{Memory, checked_add, checked_mul};
@@ -142,20 +141,4 @@ pub(crate) fn get_mono_module(
     }
 
     Ok(None)
-}
-
-pub(crate) fn is_64_bit_process(handle: BorrowedHandle<'_>) -> Result<bool> {
-    if !cfg!(target_pointer_width = "64") {
-        return Ok(false);
-    }
-
-    let mut is_wow64 = BOOL::default();
-    if unsafe { IsWow64Process(handle.as_raw_handle() as HANDLE, &mut is_wow64) } == 0 {
-        Err(Error::Windows {
-            operation: "failed to check Wow64 status",
-            source: std::io::Error::last_os_error(),
-        })
-    } else {
-        Ok(is_wow64 == 0 && size_of::<usize>() == 8)
-    }
 }
