@@ -1,11 +1,12 @@
 use std::fmt::Display;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use log::{error, info};
-use uniject::Injector;
+use uniject::{Injector, Result, find_process_id_by_name};
 
 #[derive(Parser)]
 #[command(name = "uniject_console")]
@@ -56,40 +57,27 @@ enum Commands {
     },
 }
 
-fn main() {
+fn main() -> Result<()> {
     env_logger::Builder::from_default_env().filter_level(log::LevelFilter::Debug).init();
     let cli = Cli::parse();
 
+    let process = match &cli.command {
+        Commands::Inject { process, .. } | Commands::Eject { process, .. } => process,
+    };
+    let process_id =
+        process.parse::<u32>().map_or_else(|_| find_process_id_by_name(process), Ok)?;
+    let mut injector = Injector::new(process_id)?;
+
     match &cli.command {
-        Commands::Inject { process, assembly, namespace, class, method } => {
-            let mut injector = create_injector(process);
+        Commands::Inject { assembly, namespace, class, method, .. } => {
             inject_assembly(&mut injector, assembly, namespace, class, method);
         }
-        Commands::Eject { process, assembly, namespace, class, method } => {
-            let mut injector = create_injector(process);
+        Commands::Eject { assembly, namespace, class, method, .. } => {
             eject_assembly(&mut injector, assembly, namespace, class, method);
         }
     }
-}
 
-fn create_injector(process: &str) -> Injector {
-    if let Ok(pid) = process.parse::<u32>() {
-        match Injector::new(pid) {
-            Ok(injector) => injector,
-            Err(err) => {
-                error!("Failed to create Injector for process ID {}: {}", pid, err);
-                exit(1);
-            }
-        }
-    } else {
-        match Injector::new_by_name(process) {
-            Ok(injector) => injector,
-            Err(err) => {
-                error!("Failed to create Injector for process name {}: {}", process, err);
-                exit(1);
-            }
-        }
-    }
+    Ok(())
 }
 
 fn inject_assembly(
@@ -115,7 +103,7 @@ fn inject_assembly(
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("unknown"),
-                format_address(remote_assembly, injector.is_64_bit)
+                format_address(remote_assembly, injector.is_64_bit())
             );
         }
         Err(e) => error!("Failed to inject assembly: {}", e),
@@ -137,8 +125,8 @@ fn eject_assembly(
     }
 }
 
-fn parse_assembly_address(addr_str: &str) -> usize {
-    if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
+fn parse_assembly_address(addr_str: &str) -> NonZeroUsize {
+    let address = if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
         usize::from_str_radix(&addr_str[2..], 16).unwrap_or_else(|_| {
             error!("Invalid hex address: {}", addr_str);
             exit(1);
@@ -148,7 +136,12 @@ fn parse_assembly_address(addr_str: &str) -> usize {
             error!("Invalid address: {}", addr_str);
             exit(1);
         })
-    }
+    };
+
+    NonZeroUsize::new(address).unwrap_or_else(|| {
+        error!("Assembly address cannot be zero");
+        exit(1);
+    })
 }
 
 fn format_address<T: Display + std::fmt::UpperHex>(address: T, is_64_bit: bool) -> String {

@@ -1,8 +1,9 @@
 mod assembler;
+mod error;
 mod injector;
-mod injector_exceptions;
 mod memory;
 mod process;
 
-pub use assembler::*;
-pub use injector::*;
+pub use error::{Error, Result};
+pub use injector::Injector;
+pub use process::find_process_id_by_name;
