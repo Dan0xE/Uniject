@@ -4,9 +4,7 @@ use std::num::NonZeroUsize;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::System::Diagnostics::Debug::{
-    FlushInstructionCache, ReadProcessMemory, WriteProcessMemory,
-};
+use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx, VirtualFreeEx,
 };
@@ -142,26 +140,6 @@ impl<H: AsHandle> Memory<H> {
         } else {
             Err(Error::Windows {
                 operation: "failed to write process memory",
-                source: std::io::Error::last_os_error(),
-            })
-        }
-    }
-
-    pub(crate) fn write_code(&self, address: NonZeroUsize, code: &[u8]) -> Result<()> {
-        self.write(address, code)?;
-
-        if unsafe {
-            FlushInstructionCache(
-                self.raw_handle(),
-                address.get() as *const std::ffi::c_void,
-                code.len(),
-            )
-        } != 0
-        {
-            Ok(())
-        } else {
-            Err(Error::Windows {
-                operation: "failed to flush process instruction cache",
                 source: std::io::Error::last_os_error(),
             })
         }

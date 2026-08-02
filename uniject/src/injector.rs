@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED};
+use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use windows_sys::Win32::System::Threading::{
     CreateRemoteThread, IsWow64Process, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject,
 };
@@ -381,7 +382,20 @@ impl Injector {
                 address
             }
         };
-        self.memory.write_code(code_buffer, &code)?;
+        self.memory.write(code_buffer, &code)?;
+        if unsafe {
+            FlushInstructionCache(
+                self.memory.as_handle().as_raw_handle() as HANDLE,
+                code_buffer.get() as *const std::ffi::c_void,
+                code.len(),
+            )
+        } == 0
+        {
+            return Err(Error::Windows {
+                operation: "failed to flush process instruction cache",
+                source: std::io::Error::last_os_error(),
+            });
+        }
 
         let mut thread_id: u32 = 0;
         let thread = unsafe {
