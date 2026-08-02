@@ -2,8 +2,22 @@
 name = "uniject"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.85"
+authors = ["Daniel Oppermann"]
+description = "Inject and invoke .NET assemblies in Mono-embedded Windows processes"
+license = "MIT"
+repository = "https://github.com/Dan0xE/Uniject"
+homepage = "https://github.com/Dan0xE/Uniject"
+documentation = "https://docs.rs/uniject"
+readme = "README.md"
+keywords = ["mono", "unity", "injection", "windows", "dotnet"]
+categories = ["development-tools", "os::windows-apis"]
 
 [dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Diagnostics_Debug", "Win32_Security"] }
 iced-x86 = { version = "1", default-features = false, features = ["code_asm", "std"] }
 thiserror = "2"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "i686-pc-windows-msvc"]

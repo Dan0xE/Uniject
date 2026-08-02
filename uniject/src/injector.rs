@@ -43,6 +43,10 @@ impl From<i32> for MonoImageOpenStatus {
     }
 }
 
+/// An injector connected to one Mono-embedded target process.
+///
+/// The process handle and all remote allocations created by this value remain owned until the
+/// injector is dropped.
 pub struct Injector {
     memory: Memory<OwnedHandle>,
     exports: HashMap<&'static str, NonZeroUsize>,
@@ -71,6 +75,7 @@ impl Injector {
         MONO_CLASS_GET_NAME = "mono_class_get_name",
     }
 
+    /// Opens `process_id`, locates its Mono module, and resolves the APIs required for injection.
     pub fn new(process_id: u32) -> Result<Self> {
         let raw_handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
 
@@ -128,6 +133,7 @@ impl Injector {
         })
     }
 
+    /// Returns whether the target process uses a 64-bit address space.
     pub fn is_64_bit(&self) -> bool {
         self.is_64_bit
     }
@@ -140,6 +146,10 @@ impl Injector {
             .ok_or(Error::MissingExport { name, module: self.mono_module })
     }
 
+    /// Loads `raw_assembly` and invokes the named static, parameterless method.
+    ///
+    /// The returned address identifies the loaded Mono assembly and can later be passed to
+    /// [`Self::eject`].
     pub fn inject(
         &mut self,
         raw_assembly: &[u8],
@@ -169,6 +179,10 @@ impl Injector {
         Ok(assembly)
     }
 
+    /// Invokes the named static, parameterless unload method and closes `assembly`.
+    ///
+    /// `assembly` must be an address previously returned by [`Self::inject`] for this target
+    /// process.
     pub fn eject(
         &mut self,
         assembly: NonZeroUsize,
