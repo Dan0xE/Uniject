@@ -58,6 +58,7 @@ fn get_exported_functions(
     };
 
     let mut exported_functions = HashMap::with_capacity(required_exports.len());
+
     'exports: for (name, ordinal) in
         names.chunks_exact(size_of::<u32>()).zip(ordinals.chunks_exact(size_of::<u16>()))
     {
