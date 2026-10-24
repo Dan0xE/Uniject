@@ -85,15 +85,15 @@ impl<H: AsHandle> Memory<H> {
                 buffer.len(),
                 std::ptr::null_mut(),
             )
-        } != 0
+        } == 0
         {
-            Ok(())
-        } else {
-            Err(Error::Windows {
+            return Err(Error::Windows {
                 operation: "failed to read process memory",
                 source: std::io::Error::last_os_error(),
-            })
+            });
         }
+
+        Ok(())
     }
 
     pub(crate) fn allocate_and_write(&mut self, data: &[u8]) -> Result<NonZeroUsize> {
@@ -134,15 +134,15 @@ impl<H: AsHandle> Memory<H> {
                 size.get(),
                 std::ptr::null_mut(),
             )
-        } != 0
+        } == 0
         {
-            Ok(())
-        } else {
-            Err(Error::Windows {
+            return Err(Error::Windows {
                 operation: "failed to write process memory",
                 source: std::io::Error::last_os_error(),
-            })
+            });
         }
+
+        Ok(())
     }
 }
 
