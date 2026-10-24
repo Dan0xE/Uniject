@@ -147,6 +147,7 @@ impl<H: AsHandle> Memory<H> {
 }
 
 impl<H: AsHandle> AsHandle for Memory<H> {
+    #[inline]
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
     }

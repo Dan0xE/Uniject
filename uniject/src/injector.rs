@@ -134,6 +134,7 @@ impl Injector {
     }
 
     /// Returns whether the target process uses a 64-bit address space.
+    #[inline]
     pub fn is_64_bit(&self) -> bool {
         self.is_64_bit
     }
